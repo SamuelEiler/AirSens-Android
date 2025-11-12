@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="#F5F5F5">
+
+    <!-- Header Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/app_name"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="#2C3E50"
+        android:gravity="center"
+        android:paddingBottom="8dp" />
+
+    <!-- Status Text -->
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/ready_to_scan"
+        android:textSize="16sp"
+        android:textColor="#34495E"
+        android:gravity="center"
+        android:padding="12dp"
+        android:background="@android:color/white"
+        android:layout_marginBottom="16dp"
+        android:elevation="2dp" />
+
+    <!-- Button Container -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <Button
+            android:id="@+id/scanButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/scan_for_devices"
+            android:textColor="@android:color/white"
+            android:backgroundTint="#3498DB"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/disconnectButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/disconnect"
+            android:textColor="@android:color/white"
+            android:backgroundTint="#E74C3C"
+            android:enabled="false" />
+    </LinearLayout>
+
+    <!-- Device List View (visible when scanning/not connected) -->
+    <ListView
+        android:id="@+id/deviceListView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@android:color/white"
+        android:divider="#E0E0E0"
+        android:dividerHeight="1dp"
+        android:padding="8dp"
+        android:elevation="2dp" />
+
+    <!-- Data Display Container (visible when connected) -->
+    <ScrollView
+        android:id="@+id/dataContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Particulate Matter Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/particulate_matter"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#E8F4F8" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@android:color/white"
+                android:padding="16dp"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/pm10Text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="PM10: -- µg/m³"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp" />
+
+                <TextView
+                    android:id="@+id/pm25Text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="PM2.5: -- µg/m³"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp" />
+
+                <TextView
+                    android:id="@+id/pm1Text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="PM1.0: -- µg/m³"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp" />
+
+                <TextView
+                    android:id="@+id/obstructedText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Sensor Status: --"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:paddingTop="8dp" />
+            </LinearLayout>
+
+            <!-- Environmental Data Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/environmental_data"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#E8F8E8" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@android:color/white"
+                android:padding="16dp"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/temperatureText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Temperature: -- °C"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/humidityText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Humidity: -- %"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/pressureText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Pressure: -- hPa"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- Air Quality Index Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/air_quality_index"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#FFF4E8" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@android:color/white"
+                android:padding="16dp"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/iaqText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="IAQ: --"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/iaqAccuracyText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="IAQ Accuracy: --"
+                    android:textSize="14sp"
+                    android:textColor="#7F8C8D"
+                    android:paddingVertical="4dp" />
+
+                <TextView
+                    android:id="@+id/gasResistanceText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Gas Resistance: -- Ω"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- Gas Profile Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/gas_profile"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#F8E8F8" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@android:color/white"
+                android:padding="16dp"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/heaterTempText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Heater Temp: -- °C"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp" />
+
+                <TextView
+                    android:id="@+id/gasProfileResistanceText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Gas Resistance: -- Ω"
+                    android:textSize="16sp"
+                    android:textColor="#34495E"
+                    android:paddingVertical="4dp" />
+            </LinearLayout>
+
+            <!-- Timestamp -->
+            <TextView
+                android:id="@+id/timestampText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Last Update: --"
+                android:textSize="12sp"
+                android:textColor="#95A5A6"
+                android:gravity="center"
+                android:paddingTop="8dp"
+                android:paddingBottom="16dp" />
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>

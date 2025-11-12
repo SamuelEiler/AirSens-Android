@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirSens Monitor</string>
+    <string name="scan_for_devices">Scan for Devices</string>
+    <string name="stop_scan">Stop Scan</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="ready_to_scan">Ready to scan for sensors</string>
+    <string name="scanning">Scanning for devices…</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="particulate_matter">Particulate Matter</string>
+    <string name="environmental_data">Environmental Data</string>
+    <string name="air_quality_index">Air Quality Index</string>
+    <string name="gas_profile">Gas Profile</string>
+    <string name="no_devices_found">No devices found</string>
+    <string name="connecting">Connecting…</string>
+</resources>
