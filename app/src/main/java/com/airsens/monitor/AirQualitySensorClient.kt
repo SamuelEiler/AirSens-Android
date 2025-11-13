@@ -33,9 +33,9 @@ class AirQualitySensorClient(
 
     data class MeasurementData(
         val timestamp: Long,
-        val pm10: Float,
-        val pm25: Float,
         val pm1: Float,
+        val pm25: Float,
+        val pm10: Float,
         val obstructed: Boolean,
         val timeValid: Boolean,
         val temperature: Float? = null,
@@ -79,16 +79,9 @@ class AirQualitySensorClient(
             Log.d(TAG, "Services discovered: status=$status")
 
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                // Send time sync first
+                // Start the chain of operations: 1. Time Sync
+                Log.d(TAG, "Starting GATT operation chain: Time Sync")
                 sendTimeSync(gatt)
-
-                // Enable notifications for measurements and gas profile
-                enableNotification(gatt, MEASUREMENT_UUID)
-
-                // Small delay before enabling second notification
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    enableNotification(gatt, GAS_PROFILE_UUID)
-                }, 500)
             } else {
                 listener.onError("Service discovery failed: $status")
             }
@@ -119,10 +112,8 @@ class AirQualitySensorClient(
                     }
                 }
                 GAS_PROFILE_UUID -> {
-                    Log.d(TAG, "Processing GAS_PROFILE data...")
                     val dataList = parseGasProfiles(characteristic.value)
                     if (dataList.isNotEmpty()) {
-                        Log.d(TAG, "Gas profiles parsed: ${dataList.size} entries")
                         dataList.forEach { data ->
                             listener.onGasProfileReceived(data)
                         }
@@ -142,8 +133,29 @@ class AirQualitySensorClient(
 
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d(TAG, "Write successful for ${characteristic.uuid}")
+                if (characteristic.uuid == TIME_SYNC_UUID) {
+                    // Time sync is done, now request MTU
+                    Log.d(TAG, "GATT chain: Requesting MTU to 256")
+                    gatt.requestMtu(256)
+                }
             } else {
                 Log.e(TAG, "Write failed for ${characteristic.uuid}: $status")
+                disconnect()
+                listener.onError("GATT write failed for ${characteristic.uuid}")
+            }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
+            super.onMtuChanged(gatt, mtu, status)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "MTU changed to $mtu")
+                // Now that MTU is negotiated, proceed with enabling measurement notifications
+                Log.d(TAG, "GATT chain: Enabling Measurement notifications")
+                enableNotification(gatt!!, MEASUREMENT_UUID)
+            } else {
+                Log.e(TAG, "Failed to change MTU: $status")
+                disconnect()
+                listener.onError("Failed to negotiate MTU: $status")
             }
         }
 
@@ -152,10 +164,22 @@ class AirQualitySensorClient(
             descriptor: BluetoothGattDescriptor,
             status: Int
         ) {
-            Log.d(TAG, "Descriptor write: ${descriptor.uuid}, status=$status")
+            Log.d(TAG, "Descriptor write: ${descriptor.uuid} for char ${descriptor.characteristic.uuid}, status=$status")
 
-            if (status != BluetoothGatt.GATT_SUCCESS) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val parentCharacteristicUUID = descriptor.characteristic.uuid
+                if (parentCharacteristicUUID == MEASUREMENT_UUID) {
+                    // Measurement notification enabled, now enable gas profile notifications
+                    Log.d(TAG, "GATT chain: Enabling Gas Profile notifications")
+                    enableNotification(gatt, GAS_PROFILE_UUID)
+                } else if (parentCharacteristicUUID == GAS_PROFILE_UUID) {
+                    // Gas profile notification enabled, chain is complete
+                    Log.d(TAG, "GATT chain: All notifications enabled.")
+                }
+            } else {
                 Log.e(TAG, "Descriptor write failed: $status")
+                disconnect()
+                listener.onError("GATT descriptor write failed for ${descriptor.characteristic.uuid}")
             }
         }
     }
@@ -257,17 +281,19 @@ class AirQualitySensorClient(
 
             // Parse common data
             val timestamp = buffer.int.toLong()
-            val pm10 = buffer.float
-            val pm25 = buffer.float
             val pm1 = buffer.float
+            val pm25 = buffer.float
+            val pm10 = buffer.float
 
-            Log.d(TAG, "Timestamp: $timestamp, PM values - PM10: $pm10, PM2.5: $pm25, PM1.0: $pm1")
+            Log.d(TAG, "Timestamp: $timestamp, PM values - PM1.0: $pm1, PM2.5: $pm25, PM10: $pm10")
 
             val obstructed = buffer.get() != 0.toByte()
             val timeValid = buffer.get() != 0.toByte()
             val iaqAccuracy = buffer.get().toInt() and 0xFF
-            buffer.get() // Skip padding
-            buffer.get() // Skip padding
+
+            // Skip 2 padding bytes
+            buffer.get()
+            buffer.get()
 
             Log.d(TAG, "Obstructed: $obstructed, TimeValid: $timeValid, IAQ Accuracy: $iaqAccuracy")
 
@@ -290,7 +316,7 @@ class AirQualitySensorClient(
             }
 
             val result = MeasurementData(
-                timestamp, pm10, pm25, pm1, obstructed, timeValid,
+                timestamp, pm1, pm25, pm10, obstructed, timeValid,
                 temperature, humidity, pressure, iaq, gasResistance, iaqAccuracy
             )
 
@@ -306,8 +332,6 @@ class AirQualitySensorClient(
     private fun parseGasProfiles(data: ByteArray): List<GasProfileData> {
         val profiles = mutableListOf<GasProfileData>()
         try {
-            Log.d(TAG, "Parsing gas profiles: ${data.size} bytes")
-
             if (data.size < 14) {
                 Log.e(TAG, "Gas profile data too short: ${data.size} bytes, expected at least 14")
                 return emptyList()
@@ -319,8 +343,6 @@ class AirQualitySensorClient(
             val entrySize = 14
             val numEntries = data.size / entrySize
 
-            Log.d(TAG, "Number of gas profile entries: $numEntries")
-
             for (i in 0 until numEntries) {
                 if (buffer.remaining() >= entrySize) {
                     val heaterTemp = buffer.short.toInt() and 0xFFFF
@@ -330,15 +352,11 @@ class AirQualitySensorClient(
 
                     val profile = GasProfileData(heaterTemp, gasResistance, humidity, pressure)
                     profiles.add(profile)
-
-                    Log.d(TAG, "Gas profile #$i - Temp: $heaterTemp°C, Gas: $gasResistance Ω, Humidity: $humidity%, Pressure: $pressure hPa")
                 } else {
                     Log.w(TAG, "Insufficient data for entry $i, remaining: ${buffer.remaining()}")
                     break
                 }
             }
-
-            Log.d(TAG, "Parsed ${profiles.size} gas profile entries")
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing gas profiles", e)
             e.printStackTrace()
