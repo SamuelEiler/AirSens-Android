@@ -66,11 +66,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private lateinit var obstructedText: TextView
     private lateinit var iaqAccuracyText: TextView
 
-    // Gas profile views
-    private lateinit var gasProfileContainer: LinearLayout
-    private lateinit var gasProfilePlaceholder: TextView
-    private val gasProfileViews = mutableListOf<View>()
-
     // Chart views
     private lateinit var gasResistanceChart: BarChart
     private lateinit var particleMatterChart: LineChart
@@ -116,10 +111,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         timestampText = findViewById(R.id.timestampText)
         obstructedText = findViewById(R.id.obstructedText)
         iaqAccuracyText = findViewById(R.id.iaqAccuracyText)
-
-        // Gas profile views
-        gasProfileContainer = findViewById(R.id.gasProfileContainer)
-        gasProfilePlaceholder = findViewById(R.id.gasProfilePlaceholder)
 
         // Chart views
         gasResistanceChart = findViewById(R.id.gasResistanceChart)
