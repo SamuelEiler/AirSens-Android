@@ -98,21 +98,34 @@ class AirQualitySensorClient(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            Log.d(TAG, "Characteristic changed: ${characteristic.uuid}")
+            val dataSize = characteristic.value?.size ?: 0
+            Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, size=$dataSize bytes")
+
+            // Log raw data for debugging
+            characteristic.value?.let { bytes ->
+                val hexString = bytes.joinToString(" ") { "%02X".format(it) }
+                Log.d(TAG, "Raw data: $hexString")
+            }
 
             when (characteristic.uuid) {
                 MEASUREMENT_UUID -> {
+                    Log.d(TAG, "Processing MEASUREMENT data...")
                     val data = parseMeasurement(characteristic.value)
                     if (data != null) {
+                        Log.d(TAG, "Measurement parsed successfully: PM10=${data.pm10}, PM2.5=${data.pm25}, PM1.0=${data.pm1}")
                         listener.onMeasurementReceived(data)
                     } else {
                         Log.e(TAG, "Failed to parse measurement data")
                     }
                 }
                 GAS_PROFILE_UUID -> {
-                    val data = parseGasProfile(characteristic.value)
-                    if (data != null) {
-                        listener.onGasProfileReceived(data)
+                    Log.d(TAG, "Processing GAS_PROFILE data...")
+                    val dataList = parseGasProfiles(characteristic.value)
+                    if (dataList.isNotEmpty()) {
+                        Log.d(TAG, "Gas profiles parsed: ${dataList.size} entries")
+                        dataList.forEach { data ->
+                            listener.onGasProfileReceived(data)
+                        }
                     } else {
                         Log.e(TAG, "Failed to parse gas profile data")
                     }
@@ -226,8 +239,10 @@ class AirQualitySensorClient(
 
     private fun parseMeasurement(data: ByteArray): MeasurementData? {
         try {
+            Log.d(TAG, "Parsing measurement data: ${data.size} bytes")
+
             if (data.size < 22) {
-                Log.e(TAG, "Measurement data too short: ${data.size} bytes")
+                Log.e(TAG, "Measurement data too short: ${data.size} bytes, expected at least 22")
                 return null
             }
 
@@ -246,11 +261,15 @@ class AirQualitySensorClient(
             val pm25 = buffer.float
             val pm1 = buffer.float
 
+            Log.d(TAG, "Timestamp: $timestamp, PM values - PM10: $pm10, PM2.5: $pm25, PM1.0: $pm1")
+
             val obstructed = buffer.get() != 0.toByte()
             val timeValid = buffer.get() != 0.toByte()
             val iaqAccuracy = buffer.get().toInt() and 0xFF
             buffer.get() // Skip padding
             buffer.get() // Skip padding
+
+            Log.d(TAG, "Obstructed: $obstructed, TimeValid: $timeValid, IAQ Accuracy: $iaqAccuracy")
 
             // Parse BME690 data if present
             var temperature: Float? = null
@@ -265,36 +284,65 @@ class AirQualitySensorClient(
                 pressure = buffer.float
                 iaq = buffer.float
                 gasResistance = buffer.float
+                Log.d(TAG, "BME690 data - Temp: $temperature, Humidity: $humidity, Pressure: $pressure, IAQ: $iaq, Gas: $gasResistance")
+            } else {
+                Log.d(TAG, "No BME690 data or insufficient bytes. Remaining: ${buffer.remaining()}")
             }
 
-            return MeasurementData(
+            val result = MeasurementData(
                 timestamp, pm10, pm25, pm1, obstructed, timeValid,
                 temperature, humidity, pressure, iaq, gasResistance, iaqAccuracy
             )
+
+            Log.d(TAG, "Measurement data parsed successfully")
+            return result
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing measurement", e)
+            e.printStackTrace()
             return null
         }
     }
 
-    private fun parseGasProfile(data: ByteArray): GasProfileData? {
+    private fun parseGasProfiles(data: ByteArray): List<GasProfileData> {
+        val profiles = mutableListOf<GasProfileData>()
         try {
+            Log.d(TAG, "Parsing gas profiles: ${data.size} bytes")
+
             if (data.size < 14) {
-                Log.e(TAG, "Gas profile data too short: ${data.size} bytes")
-                return null
+                Log.e(TAG, "Gas profile data too short: ${data.size} bytes, expected at least 14")
+                return emptyList()
             }
 
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            val heaterTemp = buffer.short.toInt() and 0xFFFF
-            val gasResistance = buffer.float
-            val humidity = buffer.float
-            val pressure = buffer.float
+            // Each gas profile entry is 14 bytes: 2 (temp) + 4 (gas) + 4 (humidity) + 4 (pressure)
+            val entrySize = 14
+            val numEntries = data.size / entrySize
 
-            return GasProfileData(heaterTemp, gasResistance, humidity, pressure)
+            Log.d(TAG, "Number of gas profile entries: $numEntries")
+
+            for (i in 0 until numEntries) {
+                if (buffer.remaining() >= entrySize) {
+                    val heaterTemp = buffer.short.toInt() and 0xFFFF
+                    val gasResistance = buffer.float
+                    val humidity = buffer.float
+                    val pressure = buffer.float
+
+                    val profile = GasProfileData(heaterTemp, gasResistance, humidity, pressure)
+                    profiles.add(profile)
+
+                    Log.d(TAG, "Gas profile #$i - Temp: $heaterTemp°C, Gas: $gasResistance Ω, Humidity: $humidity%, Pressure: $pressure hPa")
+                } else {
+                    Log.w(TAG, "Insufficient data for entry $i, remaining: ${buffer.remaining()}")
+                    break
+                }
+            }
+
+            Log.d(TAG, "Parsed ${profiles.size} gas profile entries")
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing gas profile", e)
-            return null
+            Log.e(TAG, "Error parsing gas profiles", e)
+            e.printStackTrace()
         }
+        return profiles
     }
 }

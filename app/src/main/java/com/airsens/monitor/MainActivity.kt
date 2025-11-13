@@ -60,8 +60,9 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private lateinit var iaqAccuracyText: TextView
 
     // Gas profile views
-    private lateinit var heaterTempText: TextView
-    private lateinit var gasProfileResistanceText: TextView
+    private lateinit var gasProfileContainer: LinearLayout
+    private lateinit var gasProfilePlaceholder: TextView
+    private val gasProfileViews = mutableListOf<View>()
 
     private val deviceList = mutableListOf<BluetoothDevice>()
     private lateinit var deviceAdapter: ArrayAdapter<String>
@@ -96,8 +97,8 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         iaqAccuracyText = findViewById(R.id.iaqAccuracyText)
 
         // Gas profile views
-        heaterTempText = findViewById(R.id.heaterTempText)
-        gasProfileResistanceText = findViewById(R.id.gasProfileResistanceText)
+        gasProfileContainer = findViewById(R.id.gasProfileContainer)
+        gasProfilePlaceholder = findViewById(R.id.gasProfilePlaceholder)
 
         // Setup buttons
         scanButton.setOnClickListener {
@@ -278,8 +279,18 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private fun disconnect() {
         sensorClient?.disconnect()
         sensorClient = null
+        clearGasProfiles()
         updateUIState(false)
         statusText.text = "Disconnected"
+    }
+
+    private fun clearGasProfiles() {
+        gasProfileContainer.removeAllViews()
+        gasProfileViews.clear()
+
+        // Re-add placeholder
+        gasProfileContainer.addView(gasProfilePlaceholder)
+        gasProfilePlaceholder.visibility = View.VISIBLE
     }
 
     private fun updateUIState(connected: Boolean) {
@@ -349,8 +360,38 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
 
     override fun onGasProfileReceived(data: AirQualitySensorClient.GasProfileData) {
         runOnUiThread {
-            heaterTempText.text = "Heater Temp: ${data.heaterTemp}°C"
-            gasProfileResistanceText.text = "Gas Resistance: %.0f Ω".format(data.gasResistance)
+            // Hide placeholder if showing
+            if (gasProfilePlaceholder.visibility == View.VISIBLE) {
+                gasProfilePlaceholder.visibility = View.GONE
+            }
+
+            // Create a new view for this gas profile entry
+            val profileView = layoutInflater.inflate(android.R.layout.simple_list_item_2, gasProfileContainer, false)
+
+            // Set the data
+            val text1 = profileView.findViewById<TextView>(android.R.id.text1)
+            val text2 = profileView.findViewById<TextView>(android.R.id.text2)
+
+            text1.text = "Heater Temp: ${data.heaterTemp}°C → Gas Resistance: %.0f Ω".format(data.gasResistance)
+            text1.textSize = 14f
+            text1.setTextColor(ContextCompat.getColor(this, R.color.text_primary))
+
+            text2.text = "Humidity: %.1f%% | Pressure: %.1f hPa".format(data.humidity, data.pressure)
+            text2.textSize = 12f
+            text2.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+
+            // Add some padding
+            profileView.setPadding(0, 8, 0, 8)
+
+            // Add to container
+            gasProfileContainer.addView(profileView)
+            gasProfileViews.add(profileView)
+
+            // Limit to last 10 entries to avoid clutter
+            while (gasProfileViews.size > 10) {
+                val oldView = gasProfileViews.removeAt(0)
+                gasProfileContainer.removeView(oldView)
+            }
         }
     }
 

@@ -257,7 +257,9 @@
                 android:paddingBottom="8dp"
                 android:background="#F8E8F8" />
 
+            <!-- Container for multiple gas profiles -->
             <LinearLayout
+                android:id="@+id/gasProfileContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
@@ -267,22 +269,15 @@
                 android:layout_marginBottom="8dp">
 
                 <TextView
-                    android:id="@+id/heaterTempText"
+                    android:id="@+id/gasProfilePlaceholder"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Heater Temp: -- °C"
-                    android:textSize="16sp"
-                    android:textColor="#34495E"
-                    android:paddingVertical="4dp" />
+                    android:text="No gas profile data yet"
+                    android:textSize="14sp"
+                    android:textColor="#95A5A6"
+                    android:gravity="center"
+                    android:paddingVertical="8dp" />
 
-                <TextView
-                    android:id="@+id/gasProfileResistanceText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Gas Resistance: -- Ω"
-                    android:textSize="16sp"
-                    android:textColor="#34495E"
-                    android:paddingVertical="4dp" />
             </LinearLayout>
 
             <!-- Timestamp -->
