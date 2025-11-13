@@ -11,6 +11,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -21,6 +22,11 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.github.mikephil.charting.charts.BarChart
+import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.data.*
+import com.github.mikephil.charting.formatter.ValueFormatter
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -31,6 +37,7 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         private const val REQUEST_ENABLE_BT = 1
         private const val REQUEST_PERMISSIONS = 2
         private const val SCAN_PERIOD: Long = 10000 // 10 seconds
+        private const val MAX_CHART_ENTRIES = 50 // Max data points to show in history charts
     }
 
     private lateinit var bluetoothAdapter: BluetoothAdapter
@@ -63,6 +70,20 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private lateinit var gasProfileContainer: LinearLayout
     private lateinit var gasProfilePlaceholder: TextView
     private val gasProfileViews = mutableListOf<View>()
+
+    // Chart views
+    private lateinit var gasResistanceChart: BarChart
+    private lateinit var particleMatterChart: LineChart
+    private lateinit var tempHumidityChart: LineChart
+
+    // Data storage for charts
+    private val gasResistanceMap = mutableMapOf<Int, Float>() // Temperature -> Gas Resistance
+    private val pm10History = mutableListOf<Entry>()
+    private val pm25History = mutableListOf<Entry>()
+    private val pm1History = mutableListOf<Entry>()
+    private val temperatureHistory = mutableListOf<Entry>()
+    private val humidityHistory = mutableListOf<Entry>()
+    private var dataPointCounter = 0f
 
     private val deviceList = mutableListOf<BluetoothDevice>()
     private lateinit var deviceAdapter: ArrayAdapter<String>
@@ -99,6 +120,14 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         // Gas profile views
         gasProfileContainer = findViewById(R.id.gasProfileContainer)
         gasProfilePlaceholder = findViewById(R.id.gasProfilePlaceholder)
+
+        // Chart views
+        gasResistanceChart = findViewById(R.id.gasResistanceChart)
+        particleMatterChart = findViewById(R.id.particleMatterChart)
+        tempHumidityChart = findViewById(R.id.tempHumidityChart)
+
+        // Initialize charts
+        initializeCharts()
 
         // Setup buttons
         scanButton.setOnClickListener {
@@ -279,18 +308,9 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private fun disconnect() {
         sensorClient?.disconnect()
         sensorClient = null
-        clearGasProfiles()
+        clearChartData()
         updateUIState(false)
         statusText.text = "Disconnected"
-    }
-
-    private fun clearGasProfiles() {
-        gasProfileContainer.removeAllViews()
-        gasProfileViews.clear()
-
-        // Re-add placeholder
-        gasProfileContainer.addView(gasProfilePlaceholder)
-        gasProfilePlaceholder.visibility = View.VISIBLE
     }
 
     private fun updateUIState(connected: Boolean) {
@@ -310,9 +330,16 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             pm25Text.text = "PM2.5: %.2f µg/m³".format(data.pm25)
             pm1Text.text = "PM1.0: %.2f µg/m³".format(data.pm1)
 
+            // Add particle matter data to charts
+            pm10History.add(Entry(dataPointCounter, data.pm10))
+            pm25History.add(Entry(dataPointCounter, data.pm25))
+            pm1History.add(Entry(dataPointCounter, data.pm1))
+
             data.temperature?.let {
                 temperatureText.text = "Temperature: %.1f°C".format(it)
                 temperatureText.visibility = View.VISIBLE
+                // Add to chart
+                temperatureHistory.add(Entry(dataPointCounter, it))
             } ?: run {
                 temperatureText.visibility = View.GONE
             }
@@ -320,6 +347,8 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             data.humidity?.let {
                 humidityText.text = "Humidity: %.1f%%".format(it)
                 humidityText.visibility = View.VISIBLE
+                // Add to chart
+                humidityHistory.add(Entry(dataPointCounter, it))
             } ?: run {
                 humidityText.visibility = View.GONE
             }
@@ -355,43 +384,19 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             )
 
             iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(data.iaqAccuracy)}"
+
+            // Update charts
+            dataPointCounter++
+            updateParticleMatterChart()
+            updateTempHumidityChart()
         }
     }
 
     override fun onGasProfileReceived(data: AirQualitySensorClient.GasProfileData) {
         runOnUiThread {
-            // Hide placeholder if showing
-            if (gasProfilePlaceholder.visibility == View.VISIBLE) {
-                gasProfilePlaceholder.visibility = View.GONE
-            }
-
-            // Create a new view for this gas profile entry
-            val profileView = layoutInflater.inflate(android.R.layout.simple_list_item_2, gasProfileContainer, false)
-
-            // Set the data
-            val text1 = profileView.findViewById<TextView>(android.R.id.text1)
-            val text2 = profileView.findViewById<TextView>(android.R.id.text2)
-
-            text1.text = "Heater Temp: ${data.heaterTemp}°C → Gas Resistance: %.0f Ω".format(data.gasResistance)
-            text1.textSize = 14f
-            text1.setTextColor(ContextCompat.getColor(this, R.color.text_primary))
-
-            text2.text = "Humidity: %.1f%% | Pressure: %.1f hPa".format(data.humidity, data.pressure)
-            text2.textSize = 12f
-            text2.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
-
-            // Add some padding
-            profileView.setPadding(0, 8, 0, 8)
-
-            // Add to container
-            gasProfileContainer.addView(profileView)
-            gasProfileViews.add(profileView)
-
-            // Limit to last 10 entries to avoid clutter
-            while (gasProfileViews.size > 10) {
-                val oldView = gasProfileViews.removeAt(0)
-                gasProfileContainer.removeView(oldView)
-            }
+            // Add to gas resistance chart
+            gasResistanceMap[data.heaterTemp] = data.gasResistance
+            updateGasResistanceChart()
         }
     }
 
@@ -412,6 +417,229 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             statusText.text = "Error: $error"
             Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun initializeCharts() {
+        // Initialize Gas Resistance Bar Chart
+        gasResistanceChart.apply {
+            description.isEnabled = false
+            setDrawBarShadow(false)
+            setDrawValueAboveBar(true)
+            setPinchZoom(false)
+            setScaleEnabled(false)
+            legend.isEnabled = false
+
+            xAxis.apply {
+                position = XAxis.XAxisPosition.BOTTOM
+                setDrawGridLines(false)
+                granularity = 1f
+                valueFormatter = object : ValueFormatter() {
+                    override fun getFormattedValue(value: Float): String {
+                        return "${value.toInt()}°C"
+                    }
+                }
+            }
+
+            axisLeft.apply {
+                setDrawGridLines(true)
+                axisMinimum = 0f
+            }
+
+            axisRight.isEnabled = false
+        }
+
+        // Initialize Particle Matter Line Chart
+        particleMatterChart.apply {
+            description.isEnabled = false
+            setTouchEnabled(true)
+            isDragEnabled = true
+            setScaleEnabled(true)
+            setPinchZoom(true)
+            setDrawGridBackground(false)
+
+            xAxis.apply {
+                position = XAxis.XAxisPosition.BOTTOM
+                setDrawGridLines(true)
+                granularity = 1f
+            }
+
+            axisLeft.apply {
+                setDrawGridLines(true)
+                axisMinimum = 0f
+            }
+
+            axisRight.isEnabled = false
+
+            legend.isEnabled = true
+        }
+
+        // Initialize Temperature & Humidity Line Chart
+        tempHumidityChart.apply {
+            description.isEnabled = false
+            setTouchEnabled(true)
+            isDragEnabled = true
+            setScaleEnabled(true)
+            setPinchZoom(true)
+            setDrawGridBackground(false)
+
+            xAxis.apply {
+                position = XAxis.XAxisPosition.BOTTOM
+                setDrawGridLines(true)
+                granularity = 1f
+            }
+
+            axisLeft.apply {
+                setDrawGridLines(true)
+            }
+
+            axisRight.apply {
+                setDrawGridLines(true)
+                axisMinimum = 0f
+            }
+
+            legend.isEnabled = true
+        }
+
+        // Set initial empty data
+        updateGasResistanceChart()
+        updateParticleMatterChart()
+        updateTempHumidityChart()
+    }
+
+    private fun updateGasResistanceChart() {
+        val entries = gasResistanceMap.map { (temp, resistance) ->
+            BarEntry(temp.toFloat(), resistance)
+        }.sortedBy { it.x }
+
+        if (entries.isEmpty()) {
+            gasResistanceChart.clear()
+            gasResistanceChart.invalidate()
+            return
+        }
+
+        val dataSet = BarDataSet(entries, "Gas Resistance").apply {
+            color = Color.parseColor("#9B59B6")
+            valueTextSize = 10f
+            valueFormatter = object : ValueFormatter() {
+                override fun getFormattedValue(value: Float): String {
+                    return "%.0f".format(value)
+                }
+            }
+        }
+
+        gasResistanceChart.data = BarData(dataSet)
+        gasResistanceChart.invalidate()
+    }
+
+    private fun updateParticleMatterChart() {
+        // Limit data points
+        while (pm10History.size > MAX_CHART_ENTRIES) pm10History.removeAt(0)
+        while (pm25History.size > MAX_CHART_ENTRIES) pm25History.removeAt(0)
+        while (pm1History.size > MAX_CHART_ENTRIES) pm1History.removeAt(0)
+
+        val dataSets = mutableListOf<LineDataSet>()
+
+        if (pm10History.isNotEmpty()) {
+            dataSets.add(LineDataSet(pm10History, "PM10").apply {
+                color = Color.RED
+                setCircleColor(Color.RED)
+                lineWidth = 2f
+                circleRadius = 3f
+                setDrawCircleHole(false)
+                valueTextSize = 0f
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+            })
+        }
+
+        if (pm25History.isNotEmpty()) {
+            dataSets.add(LineDataSet(pm25History, "PM2.5").apply {
+                color = Color.parseColor("#FF9800")
+                setCircleColor(Color.parseColor("#FF9800"))
+                lineWidth = 2f
+                circleRadius = 3f
+                setDrawCircleHole(false)
+                valueTextSize = 0f
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+            })
+        }
+
+        if (pm1History.isNotEmpty()) {
+            dataSets.add(LineDataSet(pm1History, "PM1.0").apply {
+                color = Color.parseColor("#4CAF50")
+                setCircleColor(Color.parseColor("#4CAF50"))
+                lineWidth = 2f
+                circleRadius = 3f
+                setDrawCircleHole(false)
+                valueTextSize = 0f
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+            })
+        }
+
+        if (dataSets.isEmpty()) {
+            particleMatterChart.clear()
+            particleMatterChart.invalidate()
+            return
+        }
+
+        particleMatterChart.data = LineData(dataSets as List<ILineDataSet>)
+        particleMatterChart.invalidate()
+    }
+
+    private fun updateTempHumidityChart() {
+        // Limit data points
+        while (temperatureHistory.size > MAX_CHART_ENTRIES) temperatureHistory.removeAt(0)
+        while (humidityHistory.size > MAX_CHART_ENTRIES) humidityHistory.removeAt(0)
+
+        val dataSets = mutableListOf<LineDataSet>()
+
+        if (temperatureHistory.isNotEmpty()) {
+            dataSets.add(LineDataSet(temperatureHistory, "Temperature (°C)").apply {
+                color = Color.parseColor("#E74C3C")
+                setCircleColor(Color.parseColor("#E74C3C"))
+                lineWidth = 2f
+                circleRadius = 3f
+                setDrawCircleHole(false)
+                valueTextSize = 0f
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+                axisDependency = com.github.mikephil.charting.components.YAxis.AxisDependency.LEFT
+            })
+        }
+
+        if (humidityHistory.isNotEmpty()) {
+            dataSets.add(LineDataSet(humidityHistory, "Humidity (%)").apply {
+                color = Color.parseColor("#3498DB")
+                setCircleColor(Color.parseColor("#3498DB"))
+                lineWidth = 2f
+                circleRadius = 3f
+                setDrawCircleHole(false)
+                valueTextSize = 0f
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+                axisDependency = com.github.mikephil.charting.components.YAxis.AxisDependency.RIGHT
+            })
+        }
+
+        if (dataSets.isEmpty()) {
+            tempHumidityChart.clear()
+            tempHumidityChart.invalidate()
+            return
+        }
+
+        tempHumidityChart.data = LineData(dataSets as List<ILineDataSet>)
+        tempHumidityChart.invalidate()
+    }
+
+    private fun clearChartData() {
+        gasResistanceMap.clear()
+        pm10History.clear()
+        pm25History.clear()
+        pm1History.clear()
+        temperatureHistory.clear()
+        humidityHistory.clear()
+        dataPointCounter = 0f
+
+        updateGasResistanceChart()
+        updateParticleMatterChart()
+        updateTempHumidityChart()
     }
 
     private fun getIAQAccuracyString(accuracy: Int): String {

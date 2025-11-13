@@ -257,9 +257,8 @@
                 android:paddingBottom="8dp"
                 android:background="#F8E8F8" />
 
-            <!-- Container for multiple gas profiles -->
+            <!-- Gas Resistance Bar Chart -->
             <LinearLayout
-                android:id="@+id/gasProfileContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
@@ -269,14 +268,74 @@
                 android:layout_marginBottom="8dp">
 
                 <TextView
-                    android:id="@+id/gasProfilePlaceholder"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="No gas profile data yet"
-                    android:textSize="14sp"
-                    android:textColor="#95A5A6"
-                    android:gravity="center"
-                    android:paddingVertical="8dp" />
+                    android:text="Gas Resistance by Temperature"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="#2C3E50"
+                    android:paddingBottom="8dp" />
+
+                <com.github.mikephil.charting.charts.BarChart
+                    android:id="@+id/gasResistanceChart"
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp" />
+
+            </LinearLayout>
+
+            <!-- Particle Matter History Chart -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Particle Matter History"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#E8F4F8" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@android:color/white"
+                android:padding="16dp"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp">
+
+                <com.github.mikephil.charting.charts.LineChart
+                    android:id="@+id/particleMatterChart"
+                    android:layout_width="match_parent"
+                    android:layout_height="250dp" />
+
+            </LinearLayout>
+
+            <!-- Temperature & Humidity History Chart -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Temperature &amp; Humidity History"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#E8F8E8" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@android:color/white"
+                android:padding="16dp"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp">
+
+                <com.github.mikephil.charting.charts.LineChart
+                    android:id="@+id/tempHumidityChart"
+                    android:layout_width="match_parent"
+                    android:layout_height="250dp" />
 
             </LinearLayout>
 
