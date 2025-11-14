@@ -22,12 +22,15 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.airsens.monitor.database.AppDatabase
 import com.github.mikephil.charting.charts.BarChart
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.*
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -46,11 +49,14 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private var sensorClient: AirQualitySensorClient? = null
     private var isScanning = false
     private val handler = Handler(Looper.getMainLooper())
+    private lateinit var database: AppDatabase
+    private var isServiceRunning = false
 
     // UI Components
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
     private lateinit var disconnectButton: Button
+    private lateinit var serviceToggleButton: Button
     private lateinit var deviceListView: ListView
     private lateinit var dataContainer: ScrollView
 
@@ -87,15 +93,19 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        database = AppDatabase.getDatabase(applicationContext)
+
         initializeViews()
         initializeBluetooth()
         checkPermissions()
+        loadHistoricalData()
     }
 
     private fun initializeViews() {
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
         disconnectButton = findViewById(R.id.disconnectButton)
+        serviceToggleButton = findViewById(R.id.serviceToggleButton)
         deviceListView = findViewById(R.id.deviceListView)
         dataContainer = findViewById(R.id.dataContainer)
 
@@ -121,6 +131,10 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         initializeCharts()
 
         // Setup buttons
+        serviceToggleButton.setOnClickListener {
+            toggleBackgroundService()
+        }
+
         scanButton.setOnClickListener {
             if (!isScanning) {
                 startScan()
@@ -187,8 +201,149 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             }
         }
 
+        // Android 13+ requires POST_NOTIFICATIONS for foreground service notifications
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
         if (permissions.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, permissions.toTypedArray(), REQUEST_PERMISSIONS)
+        }
+    }
+
+    private fun toggleBackgroundService() {
+        if (isServiceRunning) {
+            stopBackgroundService()
+        } else {
+            startBackgroundService()
+        }
+    }
+
+    private fun startBackgroundService() {
+        val intent = Intent(this, BlePeriodicService::class.java).apply {
+            action = BlePeriodicService.ACTION_START
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+
+        isServiceRunning = true
+        serviceToggleButton.text = "Stop Background Monitoring"
+        serviceToggleButton.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.holo_red_dark)
+        Toast.makeText(this, "Background monitoring started", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun stopBackgroundService() {
+        val intent = Intent(this, BlePeriodicService::class.java).apply {
+            action = BlePeriodicService.ACTION_STOP
+        }
+        startService(intent)
+
+        isServiceRunning = false
+        serviceToggleButton.text = "Start Background Monitoring"
+        serviceToggleButton.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.holo_green_dark)
+        Toast.makeText(this, "Background monitoring stopped", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun loadHistoricalData() {
+        lifecycleScope.launch {
+            try {
+                // Load last 50 measurements from database
+                val measurements = database.measurementDao().getLastN(MAX_CHART_ENTRIES)
+
+                if (measurements.isNotEmpty()) {
+                    // Clear existing data
+                    pm10History.clear()
+                    pm25History.clear()
+                    pm1History.clear()
+                    temperatureHistory.clear()
+                    humidityHistory.clear()
+
+                    // Populate charts with historical data
+                    measurements.forEach { measurement ->
+                        val timestampMs = measurement.timestamp * 1000f
+
+                        pm10History.add(Entry(timestampMs, measurement.pm10))
+                        pm25History.add(Entry(timestampMs, measurement.pm25))
+                        pm1History.add(Entry(timestampMs, measurement.pm1))
+
+                        measurement.temperature?.let {
+                            temperatureHistory.add(Entry(timestampMs, it))
+                        }
+
+                        measurement.humidity?.let {
+                            humidityHistory.add(Entry(timestampMs, it))
+                        }
+                    }
+
+                    // Update charts on UI thread
+                    runOnUiThread {
+                        updateParticleMatterChart()
+                        updateTempHumidityChart()
+
+                        // Display the latest measurement data
+                        val latest = measurements.first()
+                        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                        val timestamp = Date(latest.timestamp * 1000)
+
+                        pm10Text.text = "PM10: %.2f µg/m³".format(latest.pm10)
+                        pm25Text.text = "PM2.5: %.2f µg/m³".format(latest.pm25)
+                        pm1Text.text = "PM1.0: %.2f µg/m³".format(latest.pm1)
+                        timestampText.text = "Last Update: ${dateFormat.format(timestamp)}"
+
+                        latest.temperature?.let {
+                            temperatureText.text = "Temperature: %.1f°C".format(it)
+                            temperatureText.visibility = View.VISIBLE
+                        }
+
+                        latest.humidity?.let {
+                            humidityText.text = "Humidity: %.1f%%".format(it)
+                            humidityText.visibility = View.VISIBLE
+                        }
+
+                        latest.pressure?.let {
+                            pressureText.text = "Pressure: %.1f hPa".format(it)
+                            pressureText.visibility = View.VISIBLE
+                        }
+
+                        latest.iaq?.let {
+                            iaqText.text = "IAQ: %.1f".format(it)
+                            iaqText.visibility = View.VISIBLE
+                        }
+
+                        latest.gasResistance?.let {
+                            gasResistanceText.text = "Gas Resistance: %.0f Ω".format(it)
+                            gasResistanceText.visibility = View.VISIBLE
+                        }
+
+                        obstructedText.text = if (latest.obstructed) "⚠ Sensor Obstructed" else "✓ Sensor Clear"
+                        obstructedText.setTextColor(
+                            if (latest.obstructed)
+                                ContextCompat.getColor(this@MainActivity, android.R.color.holo_red_dark)
+                            else
+                                ContextCompat.getColor(this@MainActivity, android.R.color.holo_green_dark)
+                        )
+
+                        iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(latest.iaqAccuracy)}"
+
+                        // Show data container if we have data
+                        dataContainer.visibility = View.VISIBLE
+                        statusText.text = "Loaded ${measurements.size} historical measurements"
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading historical data", e)
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Error loading historical data", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
