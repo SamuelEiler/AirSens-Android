@@ -79,7 +79,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private val pm1History = mutableListOf<Entry>()
     private val temperatureHistory = mutableListOf<Entry>()
     private val humidityHistory = mutableListOf<Entry>()
-    private var dataPointCounter = 0f
 
     private val deviceList = mutableListOf<BluetoothDevice>()
     private lateinit var deviceAdapter: ArrayAdapter<String>
@@ -322,16 +321,17 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             pm25Text.text = "PM2.5: %.2f µg/m³".format(data.pm25)
             pm1Text.text = "PM1.0: %.2f µg/m³".format(data.pm1)
 
-            // Add particle matter data to charts
-            pm10History.add(Entry(dataPointCounter, data.pm10))
-            pm25History.add(Entry(dataPointCounter, data.pm25))
-            pm1History.add(Entry(dataPointCounter, data.pm1))
+            // Add particle matter data to charts using timestamp as X value (in milliseconds)
+            val timestampMs = data.timestamp * 1000f
+            pm10History.add(Entry(timestampMs, data.pm10))
+            pm25History.add(Entry(timestampMs, data.pm25))
+            pm1History.add(Entry(timestampMs, data.pm1))
 
             data.temperature?.let {
                 temperatureText.text = "Temperature: %.1f°C".format(it)
                 temperatureText.visibility = View.VISIBLE
                 // Add to chart
-                temperatureHistory.add(Entry(dataPointCounter, it))
+                temperatureHistory.add(Entry(timestampMs, it))
             } ?: run {
                 temperatureText.visibility = View.GONE
             }
@@ -340,7 +340,7 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
                 humidityText.text = "Humidity: %.1f%%".format(it)
                 humidityText.visibility = View.VISIBLE
                 // Add to chart
-                humidityHistory.add(Entry(dataPointCounter, it))
+                humidityHistory.add(Entry(timestampMs, it))
             } ?: run {
                 humidityText.visibility = View.GONE
             }
@@ -378,7 +378,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(data.iaqAccuracy)}"
 
             // Update charts
-            dataPointCounter++
             updateParticleMatterChart()
             updateTempHumidityChart()
         }
@@ -445,14 +444,21 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             description.isEnabled = false
             setTouchEnabled(true)
             isDragEnabled = true
-            setScaleEnabled(true)
-            setPinchZoom(true)
+            setScaleXEnabled(true)  // Enable X-axis zooming
+            setScaleYEnabled(false) // Disable Y-axis zooming (auto-scale)
+            setPinchZoom(false)     // Disable pinch zoom since we only want X-axis zoom
             setDrawGridBackground(false)
 
             xAxis.apply {
                 position = XAxis.XAxisPosition.BOTTOM
                 setDrawGridLines(true)
-                granularity = 1f
+                granularity = 1000f // 1 second minimum
+                valueFormatter = object : ValueFormatter() {
+                    private val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                    override fun getFormattedValue(value: Float): String {
+                        return dateFormat.format(Date(value.toLong()))
+                    }
+                }
             }
 
             axisLeft.apply {
@@ -463,6 +469,7 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             axisRight.isEnabled = false
 
             legend.isEnabled = true
+            setAutoScaleMinMaxEnabled(true) // Enable auto-scaling for Y-axis
         }
 
         // Initialize Temperature & Humidity Line Chart
@@ -470,14 +477,21 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             description.isEnabled = false
             setTouchEnabled(true)
             isDragEnabled = true
-            setScaleEnabled(true)
-            setPinchZoom(true)
+            setScaleXEnabled(true)  // Enable X-axis zooming
+            setScaleYEnabled(false) // Disable Y-axis zooming (auto-scale)
+            setPinchZoom(false)     // Disable pinch zoom since we only want X-axis zoom
             setDrawGridBackground(false)
 
             xAxis.apply {
                 position = XAxis.XAxisPosition.BOTTOM
                 setDrawGridLines(true)
-                granularity = 1f
+                granularity = 1000f // 1 second minimum
+                valueFormatter = object : ValueFormatter() {
+                    private val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                    override fun getFormattedValue(value: Float): String {
+                        return dateFormat.format(Date(value.toLong()))
+                    }
+                }
             }
 
             axisLeft.apply {
@@ -490,6 +504,7 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
             }
 
             legend.isEnabled = true
+            setAutoScaleMinMaxEnabled(true) // Enable auto-scaling for Y-axis
         }
 
         // Set initial empty data
@@ -627,7 +642,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         pm1History.clear()
         temperatureHistory.clear()
         humidityHistory.clear()
-        dataPointCounter = 0f
 
         updateGasResistanceChart()
         updateParticleMatterChart()
