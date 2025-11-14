@@ -14,6 +14,9 @@ interface MeasurementDao {
     @Query("SELECT * FROM measurements ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getLatestMeasurements(limit: Int): List<MeasurementEntity>
 
+    @Query("SELECT * FROM measurements ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getLastN(limit: Int): List<MeasurementEntity>
+
     @Query("SELECT * FROM measurements ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatest(): MeasurementEntity?
 
