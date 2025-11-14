@@ -34,16 +34,24 @@ android {
         jvmTarget = '1.8'
     }
 
-    kapt {
-        correctErrorTypes true
-        arguments {
-            arg("room.schemaLocation", "$projectDir/schemas")
-            arg("room.incremental", "true")
-        }
-        javacOptions {
-            option("-source", "1.8")
-            option("-target", "1.8")
-        }
+    // Configure kapt to use the same JVM target
+    packagingOptions {
+        pickFirst 'META-INF/proguard/androidx-*.pro'
+    }
+}
+
+// Force Kotlin compilation to use Java 1.8 target
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+kapt {
+    useBuildCache = true
+    javacOptions {
+        option("-source", "1.8")
+        option("-target", "1.8")
     }
 }
 
