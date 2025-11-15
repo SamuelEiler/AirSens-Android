@@ -444,10 +444,9 @@ class BlePeriodicService : Service() {
 
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
         Log.d(TAG, "Parsing ${data.size} bytes of data")
-        Log.d(TAG, "All bytes (hex): ${data.joinToString(" ") { "%02X".format(it) }}")
 
-        if (data.size < 38) {  // Minimum size needed
-            Log.w(TAG, "Measurement data too short: ${data.size} bytes")
+        if (data.size < 42) {  // Minimum size needed
+            Log.w(TAG, "Measurement data too short: ${data.size} bytes (need at least 42)")
             return null
         }
 
@@ -456,41 +455,38 @@ class BlePeriodicService : Service() {
 
             // Read timestamp (4 bytes, uint32)
             val timestamp = buffer.getInt(0).toLong() and 0xFFFFFFFFL
-            Log.d(TAG, "Offset 0-3 [Timestamp]: $timestamp (0x${"%08X".format(timestamp)})")
+            Log.d(TAG, "Timestamp: $timestamp")
 
-            // Read PM values - log both raw bytes and interpreted floats
-            val pm1Bytes = data.sliceArray(4..7)
-            val pm25Bytes = data.sliceArray(8..11)
-            val pm10Bytes = data.sliceArray(12..15)
+            // Read PM values as uint16 (2 bytes each, not floats!)
+            // Positions: 4-5, 8-9, 12-13
+            val pm1 = (buffer.getShort(4).toInt() and 0xFFFF).toFloat()
+            val pm25 = (buffer.getShort(8).toInt() and 0xFFFF).toFloat()
+            val pm10 = (buffer.getShort(12).toInt() and 0xFFFF).toFloat()
+            Log.d(TAG, "PM values - PM1.0: $pm1, PM2.5: $pm25, PM10: $pm10")
 
-            val pm1 = buffer.getFloat(4)
-            val pm25 = buffer.getFloat(8)
-            val pm10 = buffer.getFloat(12)
-
-            Log.d(TAG, "Offset 4-7 [PM1]: bytes=${pm1Bytes.joinToString(" ") { "%02X".format(it) }}, float=$pm1")
-            Log.d(TAG, "Offset 8-11 [PM2.5]: bytes=${pm25Bytes.joinToString(" ") { "%02X".format(it) }}, float=$pm25")
-            Log.d(TAG, "Offset 12-15 [PM10]: bytes=${pm10Bytes.joinToString(" ") { "%02X".format(it) }}, float=$pm10")
-
-            // Read flags (1 byte)
+            // Read flags (1 byte at offset 16)
             val flags = buffer.get(16).toInt() and 0xFF
             val obstructed = (flags and 0x01) != 0
             val timeValid = (flags and 0x02) != 0
-            Log.d(TAG, "Offset 16 [Flags]: 0x${"%02X".format(flags)} - obstructed=$obstructed, timeValid=$timeValid")
+            Log.d(TAG, "Flags: 0x${"%02X".format(flags)} - obstructed=$obstructed, timeValid=$timeValid")
 
-            // Read environmental data
-            val temperature = buffer.getFloat(17)
-            val humidity = buffer.getFloat(21)
-            val pressure = buffer.getFloat(25)
-            val iaq = buffer.getFloat(29)
-            val gasResistance = buffer.getFloat(33)
-            val iaqAccuracy = buffer.get(37).toInt() and 0xFF
+            // Environmental data starts at offset 22 (not 17!)
+            // Order: Temperature, Humidity, Pressure, IAQ, Gas Resistance
+            val temperature = buffer.getFloat(22)
+            val humidity = buffer.getFloat(26)
+            val pressure = buffer.getFloat(30)
+            val iaq = buffer.getFloat(34)
+            val gasResistance = buffer.getFloat(38)
 
-            Log.d(TAG, "Offset 17-20 [Temp]: $temperature")
-            Log.d(TAG, "Offset 21-24 [Humidity]: $humidity")
-            Log.d(TAG, "Offset 25-28 [Pressure]: $pressure")
-            Log.d(TAG, "Offset 29-32 [IAQ]: $iaq")
-            Log.d(TAG, "Offset 33-36 [Gas]: $gasResistance")
-            Log.d(TAG, "Offset 37 [IAQ Accuracy]: $iaqAccuracy")
+            Log.d(TAG, "Temperature: $temperature°C")
+            Log.d(TAG, "Humidity: $humidity%")
+            Log.d(TAG, "Pressure: $pressure Pa (${pressure/100} hPa)")
+            Log.d(TAG, "IAQ: $iaq")
+            Log.d(TAG, "Gas Resistance: $gasResistance Ω")
+
+            // IAQ accuracy might be at offset 42 if available
+            val iaqAccuracy = if (data.size > 42) buffer.get(42).toInt() and 0xFF else 0
+            Log.d(TAG, "IAQ Accuracy: $iaqAccuracy")
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
@@ -501,7 +497,7 @@ class BlePeriodicService : Service() {
                 timeValid = timeValid,
                 temperature = if (temperature.isNaN() || temperature < -50 || temperature > 100) null else temperature,
                 humidity = if (humidity.isNaN() || humidity < 0 || humidity > 100) null else humidity,
-                pressure = if (pressure.isNaN() || pressure < 300 || pressure > 1200) null else pressure,
+                pressure = if (pressure.isNaN() || pressure < 30000 || pressure > 120000) null else (pressure / 100), // Convert Pa to hPa
                 iaq = if (iaq.isNaN() || iaq < 0 || iaq > 500) null else iaq,
                 gasResistance = if (gasResistance.isNaN() || gasResistance < 0) null else gasResistance,
                 iaqAccuracy = iaqAccuracy
