@@ -113,6 +113,28 @@ class MeasurementDataCallbacks : public BLECharacteristicCallbacks {
 };
 ```
 
+## Known Issue: Time Sync Not Applied
+
+### Symptoms
+- Android logs show `timeValid=true` in flags
+- BUT timestamp is around **410,669,059** instead of **~1,731,679,200**
+- Timestamp is off by ~42 years (would be around 1983 instead of 2025)
+- Temperature readings may be incorrect (e.g., 55°C when room temp)
+
+### Root Cause
+The ESP32 is receiving the time sync write and setting the `timeValid` flag to `true`, but **NOT actually using the synced timestamp value** for measurements. Instead, it's likely using:
+- `millis() / 1000` (milliseconds since ESP32 boot)
+- Some internal counter that starts from 0
+- A hardcoded offset that's incorrect
+
+### Solution
+The ESP32 firmware must:
+1. ✓ Receive the time sync (you're doing this - flag is set)
+2. ✗ **STORE the synced timestamp** (missing!)
+3. ✗ **USE the stored timestamp** for future measurements (missing!)
+
+See the code example in "Issue 4: Time Sync Not Being Used" below.
+
 ## Common ESP32 Issues
 
 ### Issue 1: Measurements Not Being Stored
@@ -169,7 +191,89 @@ class ServerCallbacks : public BLEServerCallbacks {
 };
 ```
 
-### Issue 3: Characteristic Not Found
+### Issue 3: Time Sync Not Being Used
+
+**Symptom:** `timeValid=true` but timestamp is wrong (410,669,059 instead of ~1,731,679,200)
+
+**Possible causes:**
+- Time sync callback only sets flag, doesn't store the timestamp
+- Measurements still use `millis()` instead of synced time
+- Timestamp arithmetic is incorrect
+
+**Fix:**
+```cpp
+// Global variables for time tracking
+uint32_t syncedTimestamp = 0;
+uint32_t syncedAtMillis = 0;
+bool timeIsSynced = false;
+
+// Time sync characteristic callback
+class TimeSyncCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *pCharacteristic) {
+        std::string value = pCharacteristic->getValue();
+
+        if (value.length() == 4) {
+            // Extract the Unix timestamp from Android
+            syncedTimestamp = *(uint32_t*)value.data();
+            syncedAtMillis = millis();
+            timeIsSynced = true;
+
+            Serial.printf("Time sync received: %u\n", syncedTimestamp);
+            Serial.printf("Expected: ~1731679200 (Nov 2025)\n");
+            Serial.printf("Synced at millis: %u\n", syncedAtMillis);
+        }
+    }
+};
+
+// Function to get current time
+uint32_t getCurrentTime() {
+    if (!timeIsSynced) {
+        return 0;  // No valid time
+    }
+
+    // Calculate how many seconds have elapsed since sync
+    uint32_t elapsedSeconds = (millis() - syncedAtMillis) / 1000;
+
+    // Current time = sync point + elapsed time
+    return syncedTimestamp + elapsedSeconds;
+}
+
+// When storing measurements
+void storeMeasurement() {
+    Measurement m;
+
+    // Use the synced time, NOT millis()!
+    m.timestamp = getCurrentTime();
+
+    // Set flags correctly
+    m.flags = 0;
+    if (sensorObstructed) m.flags |= 0x01;
+    if (timeIsSynced) m.flags |= 0x02;  // Only set if we have valid time
+
+    // Read sensors...
+    m.pm25 = readPM25();
+    m.temperature = readTemperature();
+    // ...
+
+    measurementBuffer[bufferWriteIndex] = m;
+    bufferWriteIndex = (bufferWriteIndex + 1) % BUFFER_SIZE;
+    if (bufferCount < BUFFER_SIZE) bufferCount++;
+
+    Serial.printf("Stored measurement with timestamp: %u\n", m.timestamp);
+}
+```
+
+**Verify the fix:**
+After implementing this, you should see:
+```
+Time sync received: 1731679200
+Expected: ~1731679200 (Nov 2025)
+Synced at millis: 123456
+Stored measurement with timestamp: 1731679200
+Stored measurement with timestamp: 1731679260  (60 seconds later)
+```
+
+### Issue 4: Characteristic Not Found
 
 **Symptom:** Android logs show "Characteristic 0xAAA9 not found"
 
