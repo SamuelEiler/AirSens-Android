@@ -11,6 +11,9 @@ interface MeasurementDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(measurement: MeasurementEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(measurements: List<MeasurementEntity>): List<Long>
+
     @Query("SELECT * FROM measurements ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getLatestMeasurements(limit: Int): List<MeasurementEntity>
 
@@ -19,6 +22,9 @@ interface MeasurementDao {
 
     @Query("SELECT * FROM measurements ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatest(): MeasurementEntity?
+
+    @Query("SELECT timestamp FROM measurements ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestTimestamp(): Long?
 
     @Query("SELECT * FROM measurements ORDER BY timestamp DESC")
     fun getAllFlow(): Flow<List<MeasurementEntity>>

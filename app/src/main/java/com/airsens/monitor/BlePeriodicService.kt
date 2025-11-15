@@ -71,6 +71,11 @@ class BlePeriodicService : Service() {
     private var onCharacteristicReadCallback: ((ByteArray?, Int) -> Unit)? = null
     private var onCharacteristicChangedCallback: ((ByteArray?) -> Unit)? = null
 
+    // Bulk data sync state
+    private val receivedChunks = mutableListOf<AirQualitySensorClient.MeasurementData>()
+    private var expectedTotalChunks = 0
+    private var bulkSyncCompletionCallback: ((List<AirQualitySensorClient.MeasurementData>) -> Unit)? = null
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
@@ -202,42 +207,71 @@ class BlePeriodicService : Service() {
             try {
                 // 3. Read measurement count (optional - for monitoring)
                 val count = readMeasurementCount(gatt)
-                Log.d(TAG, "Measurement count: $count (for monitoring)")
+                Log.d(TAG, "Measurement count on ESP32: $count")
 
-                // 4. Read latest measurement (REQUIRED - always read, even if count is 0)
-                updateNotification("Reading data...")
-                val measurement = readMeasurement(gatt)
+                // 4. Perform bulk data sync to get all buffered measurements
+                updateNotification("Syncing data...")
 
-                if (measurement != null) {
-                    // 5. Store in database
-                    val entity = MeasurementEntity(
-                        timestamp = measurement.timestamp,
-                        receivedAt = System.currentTimeMillis(),
-                        pm1 = measurement.pm1,
-                        pm25 = measurement.pm25,
-                        pm10 = measurement.pm10,
-                        obstructed = measurement.obstructed,
-                        timeValid = measurement.timeValid,
-                        temperature = measurement.temperature,
-                        humidity = measurement.humidity,
-                        pressure = measurement.pressure,
-                        iaq = measurement.iaq,
-                        gasResistance = measurement.gasResistance,
-                        iaqAccuracy = measurement.iaqAccuracy
-                    )
+                // Get last synced timestamp from database
+                val lastSyncedTimestamp = database.measurementDao().getLatestTimestamp() ?: 0L
+                val currentTime = System.currentTimeMillis() / 1000  // Unix timestamp in seconds
 
-                    database.measurementDao().insert(entity)
+                Log.d(TAG, "Last synced timestamp: $lastSyncedTimestamp, current time: $currentTime")
+
+                // Request all measurements since last sync
+                val measurements = performBulkDataSync(
+                    gatt = gatt,
+                    startTime = lastSyncedTimestamp,
+                    endTime = currentTime,
+                    maxRecords = 100
+                )
+
+                if (measurements.isNotEmpty()) {
+                    Log.d(TAG, "Received ${measurements.size} measurements from bulk sync")
+
+                    // 5. Store all measurements in database
+                    val entities = measurements.map { measurement ->
+                        MeasurementEntity(
+                            timestamp = measurement.timestamp,
+                            receivedAt = System.currentTimeMillis(),
+                            pm1 = measurement.pm1,
+                            pm25 = measurement.pm25,
+                            pm10 = measurement.pm10,
+                            obstructed = measurement.obstructed,
+                            timeValid = measurement.timeValid,
+                            temperature = measurement.temperature,
+                            humidity = measurement.humidity,
+                            pressure = measurement.pressure,
+                            iaq = measurement.iaq,
+                            gasResistance = measurement.gasResistance,
+                            iaqAccuracy = measurement.iaqAccuracy
+                        )
+                    }
+
+                    database.measurementDao().insertAll(entities)
                     database.measurementDao().keepOnlyLast(500) // Keep last 500 measurements
 
-                    Log.d(TAG, "Stored measurement: PM2.5=${measurement.pm25}, Temp=${measurement.temperature}")
-                    updateNotification("Last update: ${Date()}")
+                    // 6. Acknowledge data to ESP32 (tells it to delete synced data from flash)
+                    val maxTimestamp = measurements.maxOf { it.timestamp }
+                    val ackSuccess = acknowledgeBulkData(gatt, maxTimestamp)
+
+                    if (ackSuccess) {
+                        Log.d(TAG, "Successfully acknowledged ${measurements.size} measurements (up to timestamp $maxTimestamp)")
+                        updateNotification("Synced ${measurements.size} measurements")
+                    } else {
+                        Log.w(TAG, "Failed to acknowledge bulk data")
+                        updateNotification("Sync incomplete")
+                    }
+
+                    val latest = measurements.last()
+                    Log.d(TAG, "Latest measurement: PM2.5=${latest.pm25}, Temp=${latest.temperature}")
                 } else {
-                    Log.w(TAG, "No valid measurement data received")
-                    updateNotification("No data available")
+                    Log.d(TAG, "No new measurements to sync (ESP32 buffer empty or no data in range)")
+                    updateNotification("No new data")
                 }
 
-                // Note: Time sync is now indication-based (ESP32 will request it via indication)
-                // We no longer proactively send time sync every 2 connections
+                // Note: Time sync is indication-based (ESP32 requests it via indication when needed)
+                // We no longer proactively send time sync
 
             } finally {
                 // 7. Disconnect and cleanup
@@ -420,6 +454,11 @@ class BlePeriodicService : Service() {
                             sendTimeSync(gatt)
                         }
                     }
+                    DATA_RESPONSE_UUID -> {
+                        // Bulk data chunk received
+                        Log.d(TAG, "Received bulk data chunk: ${value.size} bytes")
+                        handleBulkDataChunk(value)
+                    }
                     else -> {
                         Log.d(TAG, "Unhandled characteristic changed: ${characteristic.uuid}")
                     }
@@ -439,6 +478,14 @@ class BlePeriodicService : Service() {
                         Log.d(TAG, "ESP32 requesting time sync via indication")
                         serviceScope.launch {
                             sendTimeSync(gatt)
+                        }
+                    }
+                    DATA_RESPONSE_UUID -> {
+                        // Bulk data chunk received (use deprecated value property)
+                        val value = characteristic.value
+                        Log.d(TAG, "Received bulk data chunk: ${value?.size ?: 0} bytes")
+                        if (value != null) {
+                            handleBulkDataChunk(value)
                         }
                     }
                     else -> {
@@ -630,6 +677,413 @@ class BlePeriodicService : Service() {
             return null
         }
     }
+
+    // ===== Bulk Data Sync Functions =====
+
+    /**
+     * Enable indications on DATA_RESPONSE characteristic (0xAAA6)
+     * Must be called BEFORE requesting bulk data
+     */
+    private suspend fun enableDataResponseIndications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "No BLUETOOTH_CONNECT permission, cannot enable indications")
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val dataResponseChar = service?.getCharacteristic(DATA_RESPONSE_UUID)
+
+        if (dataResponseChar == null) {
+            Log.w(TAG, "DATA_RESPONSE characteristic not found")
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // Enable local notifications/indications
+        val success = gatt.setCharacteristicNotification(dataResponseChar, true)
+        if (!success) {
+            Log.e(TAG, "Failed to set characteristic notification for DATA_RESPONSE")
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // Enable indications on the remote device by writing to CCCD
+        val descriptor = dataResponseChar.getDescriptor(CCCD_UUID)
+        if (descriptor == null) {
+            Log.w(TAG, "CCCD descriptor not found for DATA_RESPONSE characteristic")
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // Set up callback for descriptor write completion
+        var onDescriptorWriteCallback: ((Int) -> Unit)? = null
+
+        val originalCallback = currentGatt?.callback
+        currentGatt?.callback = object : BluetoothGattCallback() {
+            override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                onDescriptorWriteCallback?.invoke(status)
+            }
+
+            // Forward other callbacks to original
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                originalCallback?.onConnectionStateChange(gatt, status, newState)
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                originalCallback?.onServicesDiscovered(gatt, status)
+            }
+
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray,
+                status: Int
+            ) {
+                originalCallback?.onCharacteristicRead(gatt, characteristic, value, status)
+            }
+
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray
+            ) {
+                originalCallback?.onCharacteristicChanged(gatt, characteristic, value)
+            }
+        }
+
+        onDescriptorWriteCallback = { status ->
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "DATA_RESPONSE indications enabled successfully")
+                continuation.resume(true)
+            } else {
+                Log.e(TAG, "Failed to enable DATA_RESPONSE indications, status=$status")
+                continuation.resume(false)
+            }
+        }
+
+        descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        val writeSuccess = gatt.writeDescriptor(descriptor)
+        Log.d(TAG, "Enabling DATA_RESPONSE indications: ${if (writeSuccess) "initiated" else "failed"}")
+
+        if (!writeSuccess) {
+            continuation.resume(false)
+        }
+    }
+
+    /**
+     * Request bulk data from ESP32 (write to 0xAAA5)
+     * @param gatt GATT connection
+     * @param startTime Unix timestamp in seconds (start of range)
+     * @param endTime Unix timestamp in seconds (end of range)
+     * @param maxRecords Maximum number of records to return (0-500)
+     */
+    private suspend fun requestBulkData(
+        gatt: BluetoothGatt,
+        startTime: Long,
+        endTime: Long,
+        maxRecords: Int = 100
+    ): Boolean = suspendCancellableCoroutine { continuation ->
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val dataRequestChar = service?.getCharacteristic(DATA_REQUEST_UUID)
+
+        if (dataRequestChar == null) {
+            Log.w(TAG, "DATA_REQUEST characteristic not found")
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // Build 10-byte request: [start_time(4), end_time(4), max_records(2)]
+        val requestData = ByteBuffer.allocate(10).apply {
+            order(ByteOrder.LITTLE_ENDIAN)
+            putInt(startTime.toInt())
+            putInt(endTime.toInt())
+            putShort(maxRecords.toShort())
+        }.array()
+
+        Log.d(TAG, "Requesting bulk data: startTime=$startTime, endTime=$endTime, maxRecords=$maxRecords")
+        Log.d(TAG, "Request bytes (hex): ${requestData.joinToString(" ") { "%02X".format(it) }}")
+
+        dataRequestChar.value = requestData
+        dataRequestChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+        val writeSuccess = gatt.writeCharacteristic(dataRequestChar)
+
+        if (writeSuccess) {
+            Log.d(TAG, "Bulk data request sent successfully")
+            continuation.resume(true)
+        } else {
+            Log.e(TAG, "Failed to send bulk data request")
+            continuation.resume(false)
+        }
+    }
+
+    /**
+     * Parse a data chunk received via indication on 0xAAA6
+     * Returns triple of (chunkIndex, totalChunks, measurementData)
+     */
+    private fun parseDataChunk(data: ByteArray): Triple<Int, Int, AirQualitySensorClient.MeasurementData?>? {
+        try {
+            if (data.size < 22) {
+                Log.w(TAG, "Data chunk too small: ${data.size} bytes (need at least 22)")
+                return null
+            }
+
+            val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+
+            // Parse chunk header (first 4 bytes)
+            val chunkIndex = buffer.getShort(0).toInt() and 0xFFFF
+            val totalChunks = buffer.getShort(2).toInt() and 0xFFFF
+
+            Log.d(TAG, "Parsing chunk $chunkIndex/$totalChunks (${data.size} bytes)")
+
+            // Parse measurement data (starts at offset 4)
+            // Format is same as regular measurement but without the chunk header
+            val sensorMask = buffer.get(4).toInt() and 0xFF
+            val hasBME690 = (sensorMask and 0x02) != 0
+
+            // Validate size
+            val expectedSize = if (hasBME690) 42 else 22
+            if (data.size < expectedSize) {
+                Log.w(TAG, "Chunk size mismatch: got ${data.size}, expected $expectedSize (hasBME690=$hasBME690)")
+                return null
+            }
+
+            // Read timestamp (4 bytes at offset 5-8)
+            val timestamp = buffer.getInt(5).toLong() and 0xFFFFFFFFL
+
+            // Read PM values as floats (4 bytes each at offsets 9, 13, 17)
+            val pm10 = buffer.getFloat(9)
+            val pm25 = buffer.getFloat(13)
+            val pm1 = buffer.getFloat(17)
+
+            // Read flags (1 byte at offset 21)
+            val flags = buffer.get(21).toInt() and 0xFF
+            val obstructed = (flags and 0x01) != 0
+            val timeValid = (flags and 0x02) != 0
+            val iaqAccuracy = (flags shr 2) and 0x03
+
+            // Read environmental data if present (offsets 22-41)
+            var temperature: Float? = null
+            var humidity: Float? = null
+            var pressure: Float? = null
+            var iaq: Float? = null
+            var gasResistance: Float? = null
+
+            if (hasBME690 && data.size >= 42) {
+                temperature = buffer.getFloat(22)
+                humidity = buffer.getFloat(26)
+                pressure = buffer.getFloat(30)
+                iaq = buffer.getFloat(34)
+                gasResistance = buffer.getFloat(38)
+
+                Log.d(TAG, "Chunk $chunkIndex: PM2.5=$pm25, Temp=$temperature, IAQ=$iaq")
+            } else {
+                Log.d(TAG, "Chunk $chunkIndex: PM2.5=$pm25 (PM only)")
+            }
+
+            val measurement = AirQualitySensorClient.MeasurementData(
+                timestamp = timestamp,
+                pm1 = pm1,
+                pm25 = pm25,
+                pm10 = pm10,
+                obstructed = obstructed,
+                timeValid = timeValid,
+                temperature = temperature,
+                humidity = humidity,
+                pressure = pressure,
+                iaq = iaq,
+                gasResistance = gasResistance,
+                iaqAccuracy = iaqAccuracy
+            )
+
+            return Triple(chunkIndex, totalChunks, measurement)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing data chunk", e)
+            return null
+        }
+    }
+
+    /**
+     * Acknowledge bulk data transfer (write to 0xAAA7)
+     * Tells ESP32 to delete all measurements up to maxTimestamp
+     */
+    private suspend fun acknowledgeBulkData(gatt: BluetoothGatt, maxTimestamp: Long): Boolean = suspendCancellableCoroutine { continuation ->
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val deleteRequestChar = service?.getCharacteristic(DELETE_REQUEST_UUID)
+
+        if (deleteRequestChar == null) {
+            Log.w(TAG, "DELETE_REQUEST characteristic not found")
+            continuation.resume(false)
+            return@suspendCancellableCoroutine
+        }
+
+        // Build 4-byte acknowledgment: [max_timestamp(4)]
+        val ackData = ByteBuffer.allocate(4).apply {
+            order(ByteOrder.LITTLE_ENDIAN)
+            putInt(maxTimestamp.toInt())
+        }.array()
+
+        Log.d(TAG, "Acknowledging bulk data up to timestamp $maxTimestamp")
+        Log.d(TAG, "Acknowledgment bytes (hex): ${ackData.joinToString(" ") { "%02X".format(it) }}")
+
+        deleteRequestChar.value = ackData
+        deleteRequestChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+        val writeSuccess = gatt.writeCharacteristic(deleteRequestChar)
+
+        if (writeSuccess) {
+            Log.d(TAG, "Bulk data acknowledgment sent successfully")
+            continuation.resume(true)
+        } else {
+            Log.e(TAG, "Failed to send bulk data acknowledgment")
+            continuation.resume(false)
+        }
+    }
+
+    /**
+     * Handle a bulk data chunk received via indication
+     * Collects chunks and triggers completion callback when all received
+     */
+    private fun handleBulkDataChunk(data: ByteArray) {
+        val parsed = parseDataChunk(data) ?: run {
+            Log.e(TAG, "Failed to parse data chunk")
+            return
+        }
+
+        val (chunkIndex, totalChunks, measurement) = parsed
+
+        if (chunkIndex == 0) {
+            // First chunk - initialize collection
+            Log.d(TAG, "Starting bulk data transfer: expecting $totalChunks chunks")
+            expectedTotalChunks = totalChunks
+            receivedChunks.clear()
+        }
+
+        // Add measurement if valid
+        if (measurement != null) {
+            receivedChunks.add(measurement)
+            Log.d(TAG, "Collected chunk ${receivedChunks.size}/$expectedTotalChunks")
+        } else {
+            Log.w(TAG, "Chunk $chunkIndex had no valid measurement data")
+        }
+
+        // Check if transfer is complete
+        if (receivedChunks.size >= expectedTotalChunks) {
+            Log.d(TAG, "Bulk data transfer complete: ${receivedChunks.size} measurements received")
+
+            // Trigger completion callback
+            val callback = bulkSyncCompletionCallback
+            if (callback != null) {
+                callback(receivedChunks.toList()) // Make a copy
+                bulkSyncCompletionCallback = null // Clear callback
+            } else {
+                Log.w(TAG, "Bulk data transfer completed but no callback registered")
+            }
+
+            // Clear state for next transfer
+            receivedChunks.clear()
+            expectedTotalChunks = 0
+        }
+    }
+
+    /**
+     * Perform bulk data sync with ESP32
+     * Returns list of measurements received, or empty list if no data/error
+     */
+    private suspend fun performBulkDataSync(
+        gatt: BluetoothGatt,
+        startTime: Long,
+        endTime: Long,
+        maxRecords: Int = 100
+    ): List<AirQualitySensorClient.MeasurementData> = withTimeoutOrNull(30000) {
+        suspendCancellableCoroutine { continuation ->
+            try {
+                // Clear any previous state
+                receivedChunks.clear()
+                expectedTotalChunks = 0
+
+                // Set up completion callback
+                bulkSyncCompletionCallback = { measurements ->
+                    Log.d(TAG, "Bulk sync callback triggered with ${measurements.size} measurements")
+                    continuation.resume(measurements)
+                }
+
+                // Enable indications
+                serviceScope.launch {
+                    val indicationsEnabled = enableDataResponseIndications(gatt)
+                    if (!indicationsEnabled) {
+                        Log.e(TAG, "Failed to enable DATA_RESPONSE indications")
+                        bulkSyncCompletionCallback = null
+                        continuation.resume(emptyList())
+                        return@launch
+                    }
+
+                    // Small delay to ensure CCCD write completes
+                    delay(200)
+
+                    // Request bulk data
+                    val requestSent = requestBulkData(gatt, startTime, endTime, maxRecords)
+                    if (!requestSent) {
+                        Log.e(TAG, "Failed to send bulk data request")
+                        bulkSyncCompletionCallback = null
+                        continuation.resume(emptyList())
+                        return@launch
+                    }
+
+                    Log.d(TAG, "Bulk data request sent, waiting for chunks...")
+
+                    // If no data available, ESP32 won't send any indications
+                    // Set a timeout to detect this case
+                    serviceScope.launch {
+                        delay(5000) // 5 second timeout for first chunk
+                        if (expectedTotalChunks == 0 && receivedChunks.isEmpty()) {
+                            Log.d(TAG, "No bulk data received (timeout) - ESP32 may have no data in range")
+                            val callback = bulkSyncCompletionCallback
+                            if (callback != null) {
+                                callback(emptyList())
+                                bulkSyncCompletionCallback = null
+                            }
+                        }
+                    }
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in performBulkDataSync", e)
+                bulkSyncCompletionCallback = null
+                continuation.resume(emptyList())
+            }
+        }
+    } ?: run {
+        Log.e(TAG, "Bulk data sync timeout")
+        bulkSyncCompletionCallback = null
+        emptyList()
+    }
+
+    // ===== End Bulk Data Sync Functions =====
 
     private fun enableTimeSyncIndications(gatt: BluetoothGatt) {
         if (ActivityCompat.checkSelfPermission(
