@@ -60,11 +60,11 @@ class BlePeriodicService : Service() {
     private var bluetoothLeScanner: BluetoothLeScanner? = null
     private var currentGatt: BluetoothGatt? = null
 
-    private var timeSyncCounter = 0
     private var isRunning = false
 
     // Callbacks for GATT operations
     private var onCharacteristicReadCallback: ((ByteArray?, Int) -> Unit)? = null
+    private var onCharacteristicChangedCallback: ((ByteArray?) -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -187,53 +187,44 @@ class BlePeriodicService : Service() {
             }
 
             try {
-                // 3. Read measurement count
+                // 3. Read measurement count (optional - for monitoring)
                 val count = readMeasurementCount(gatt)
-                Log.d(TAG, "Measurement count: $count")
+                Log.d(TAG, "Measurement count: $count (for monitoring)")
 
-                if (count == 0) {
-                    Log.w(TAG, "No measurements available from ESP32. ESP32 may not have collected data yet or buffering is not implemented.")
-                    updateNotification("Waiting for data...")
+                // 4. Read latest measurement (REQUIRED - always read, even if count is 0)
+                updateNotification("Reading data...")
+                val measurement = readMeasurement(gatt)
+
+                if (measurement != null) {
+                    // 5. Store in database
+                    val entity = MeasurementEntity(
+                        timestamp = measurement.timestamp,
+                        receivedAt = System.currentTimeMillis(),
+                        pm1 = measurement.pm1,
+                        pm25 = measurement.pm25,
+                        pm10 = measurement.pm10,
+                        obstructed = measurement.obstructed,
+                        timeValid = measurement.timeValid,
+                        temperature = measurement.temperature,
+                        humidity = measurement.humidity,
+                        pressure = measurement.pressure,
+                        iaq = measurement.iaq,
+                        gasResistance = measurement.gasResistance,
+                        iaqAccuracy = measurement.iaqAccuracy
+                    )
+
+                    database.measurementDao().insert(entity)
+                    database.measurementDao().keepOnlyLast(500) // Keep last 500 measurements
+
+                    Log.d(TAG, "Stored measurement: PM2.5=${measurement.pm25}, Temp=${measurement.temperature}")
+                    updateNotification("Last update: ${Date()}")
+                } else {
+                    Log.w(TAG, "No valid measurement data received")
+                    updateNotification("No data available")
                 }
 
-                if (count > 0) {
-                    // 4. Read measurement data
-                    updateNotification("Reading data...")
-                    val measurement = readMeasurement(gatt)
-
-                    if (measurement != null) {
-                        // 5. Store in database
-                        val entity = MeasurementEntity(
-                            timestamp = measurement.timestamp,
-                            receivedAt = System.currentTimeMillis(),
-                            pm1 = measurement.pm1,
-                            pm25 = measurement.pm25,
-                            pm10 = measurement.pm10,
-                            obstructed = measurement.obstructed,
-                            timeValid = measurement.timeValid,
-                            temperature = measurement.temperature,
-                            humidity = measurement.humidity,
-                            pressure = measurement.pressure,
-                            iaq = measurement.iaq,
-                            gasResistance = measurement.gasResistance,
-                            iaqAccuracy = measurement.iaqAccuracy
-                        )
-
-                        database.measurementDao().insert(entity)
-                        database.measurementDao().keepOnlyLast(500) // Keep last 500 measurements
-
-                        Log.d(TAG, "Stored measurement: PM2.5=${measurement.pm25}, Temp=${measurement.temperature}")
-                        updateNotification("Last update: ${Date()}")
-                    }
-                }
-
-                // 6. Time sync every 2nd connection (120 seconds)
-                timeSyncCounter++
-                if (timeSyncCounter >= 2) {
-                    sendTimeSync(gatt)
-                    timeSyncCounter = 0
-                    Log.d(TAG, "Time sync sent")
-                }
+                // Note: Time sync is now indication-based (ESP32 will request it via indication)
+                // We no longer proactively send time sync every 2 connections
 
             } finally {
                 // 7. Disconnect and cleanup
@@ -366,6 +357,10 @@ class BlePeriodicService : Service() {
                 Log.d(TAG, "onServicesDiscovered: status=$status (${getGattStatusString(status)})")
                 if (status == BluetoothGatt.GATT_SUCCESS && continuation.isActive) {
                     Log.d(TAG, "Service discovery successful")
+
+                    // Enable indications for time sync characteristic (ESP32 will request time sync)
+                    enableTimeSyncIndications(gatt)
+
                     continuation.resume(gatt) {}
                 } else if (continuation.isActive) {
                     Log.e(TAG, "Service discovery failed with status: $status")
@@ -393,6 +388,48 @@ class BlePeriodicService : Service() {
             ) {
                 Log.d(TAG, "onCharacteristicRead (deprecated) called: ${characteristic.value?.size ?: 0} bytes, status=$status")
                 onCharacteristicReadCallback?.invoke(characteristic.value, status)
+            }
+
+            // Handle indications from ESP32 (e.g., time sync request)
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray
+            ) {
+                Log.d(TAG, "onCharacteristicChanged (API 33+): UUID=${characteristic.uuid}, ${value.size} bytes")
+
+                when (characteristic.uuid) {
+                    TIME_SYNC_UUID -> {
+                        Log.d(TAG, "ESP32 requesting time sync via indication")
+                        serviceScope.launch {
+                            sendTimeSync(gatt)
+                        }
+                    }
+                    else -> {
+                        Log.d(TAG, "Unhandled characteristic changed: ${characteristic.uuid}")
+                    }
+                }
+            }
+
+            // For Android API < 33 (deprecated but still needed)
+            @Deprecated("Deprecated in API 33")
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic
+            ) {
+                Log.d(TAG, "onCharacteristicChanged (deprecated): UUID=${characteristic.uuid}")
+
+                when (characteristic.uuid) {
+                    TIME_SYNC_UUID -> {
+                        Log.d(TAG, "ESP32 requesting time sync via indication")
+                        serviceScope.launch {
+                            sendTimeSync(gatt)
+                        }
+                    }
+                    else -> {
+                        Log.d(TAG, "Unhandled characteristic changed: ${characteristic.uuid}")
+                    }
+                }
             }
         }
 
@@ -559,6 +596,42 @@ class BlePeriodicService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing measurement data", e)
             return null
+        }
+    }
+
+    private fun enableTimeSyncIndications(gatt: BluetoothGatt) {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "No BLUETOOTH_CONNECT permission, cannot enable indications")
+            return
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val timeSyncChar = service?.getCharacteristic(TIME_SYNC_UUID)
+
+        if (timeSyncChar == null) {
+            Log.w(TAG, "Time sync characteristic not found, cannot enable indications")
+            return
+        }
+
+        // Enable local notifications/indications
+        val success = gatt.setCharacteristicNotification(timeSyncChar, true)
+        if (!success) {
+            Log.e(TAG, "Failed to set characteristic notification")
+            return
+        }
+
+        // Enable indications on the remote device by writing to CCCD
+        val descriptor = timeSyncChar.getDescriptor(CCCD_UUID)
+        if (descriptor != null) {
+            descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+            val writeSuccess = gatt.writeDescriptor(descriptor)
+            Log.d(TAG, "Enabling time sync indications: ${if (writeSuccess) "success" else "failed"}")
+        } else {
+            Log.w(TAG, "CCCD descriptor not found for time sync characteristic")
         }
     }
 
