@@ -24,6 +24,7 @@ import kotlinx.coroutines.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.*
+import java.util.concurrent.CancellationException
 
 class BlePeriodicService : Service() {
 
@@ -239,6 +240,12 @@ class BlePeriodicService : Service() {
                 disconnectAndCleanup(gatt)
             }
 
+        } catch (e: CancellationException) {
+            // Connection was cancelled (device disconnected before service discovery)
+            Log.w(TAG, "Connection cancelled: ${e.message}")
+            updateNotification("Connection failed")
+            currentGatt?.close()
+            currentGatt = null
         } catch (e: Exception) {
             Log.e(TAG, "Error in periodic connection", e)
             updateNotification("Error: ${e.message}")
@@ -330,25 +337,38 @@ class BlePeriodicService : Service() {
 
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    if (ActivityCompat.checkSelfPermission(
-                            this@BlePeriodicService,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) == PackageManager.PERMISSION_GRANTED
-                    ) {
-                        gatt.discoverServices()
+                Log.d(TAG, "onConnectionStateChange: status=$status, newState=$newState (${getConnectionStateString(newState)})")
+
+                when (newState) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        Log.d(TAG, "BLE connected, discovering services...")
+                        if (ActivityCompat.checkSelfPermission(
+                                this@BlePeriodicService,
+                                Manifest.permission.BLUETOOTH_CONNECT
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            gatt.discoverServices()
+                        }
                     }
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    if (continuation.isActive) {
-                        continuation.cancel()
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        Log.w(TAG, "BLE disconnected with status=$status (${getGattStatusString(status)})")
+                        if (continuation.isActive) {
+                            if (status != BluetoothGatt.GATT_SUCCESS) {
+                                Log.e(TAG, "Connection failed with error status: $status")
+                            }
+                            continuation.cancel()
+                        }
                     }
                 }
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                Log.d(TAG, "onServicesDiscovered: status=$status (${getGattStatusString(status)})")
                 if (status == BluetoothGatt.GATT_SUCCESS && continuation.isActive) {
+                    Log.d(TAG, "Service discovery successful")
                     continuation.resume(gatt) {}
                 } else if (continuation.isActive) {
+                    Log.e(TAG, "Service discovery failed with status: $status")
                     continuation.cancel()
                 }
             }
@@ -376,10 +396,12 @@ class BlePeriodicService : Service() {
             }
         }
 
+        Log.d(TAG, "Calling device.connectGatt()")
         val gatt = device.connectGatt(this, false, callback)
         currentGatt = gatt
 
         continuation.invokeOnCancellation {
+            Log.d(TAG, "Connection cancelled, closing GATT")
             gatt.close()
         }
     }
@@ -590,6 +612,35 @@ class BlePeriodicService : Service() {
             Log.e(TAG, "Error during disconnect", e)
             gatt.close()
             currentGatt = null
+        }
+    }
+
+    private fun getConnectionStateString(state: Int): String {
+        return when (state) {
+            BluetoothProfile.STATE_CONNECTED -> "CONNECTED"
+            BluetoothProfile.STATE_CONNECTING -> "CONNECTING"
+            BluetoothProfile.STATE_DISCONNECTED -> "DISCONNECTED"
+            BluetoothProfile.STATE_DISCONNECTING -> "DISCONNECTING"
+            else -> "UNKNOWN($state)"
+        }
+    }
+
+    private fun getGattStatusString(status: Int): String {
+        return when (status) {
+            BluetoothGatt.GATT_SUCCESS -> "GATT_SUCCESS"
+            BluetoothGatt.GATT_FAILURE -> "GATT_FAILURE"
+            BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION -> "GATT_INSUFFICIENT_AUTHENTICATION"
+            BluetoothGatt.GATT_INSUFFICIENT_ENCRYPTION -> "GATT_INSUFFICIENT_ENCRYPTION"
+            BluetoothGatt.GATT_INVALID_ATTRIBUTE_LENGTH -> "GATT_INVALID_ATTRIBUTE_LENGTH"
+            BluetoothGatt.GATT_INVALID_OFFSET -> "GATT_INVALID_OFFSET"
+            BluetoothGatt.GATT_READ_NOT_PERMITTED -> "GATT_READ_NOT_PERMITTED"
+            BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED -> "GATT_REQUEST_NOT_SUPPORTED"
+            BluetoothGatt.GATT_WRITE_NOT_PERMITTED -> "GATT_WRITE_NOT_PERMITTED"
+            133 -> "GATT_ERROR (133 - Generic error, often connection timeout)"
+            8 -> "GATT_CONN_TIMEOUT (Connection timeout)"
+            19 -> "GATT_CONN_TERMINATE_PEER_USER (Remote device terminated)"
+            22 -> "GATT_CONN_TIMEOUT (Connection supervision timeout)"
+            else -> "UNKNOWN($status)"
         }
     }
 }
