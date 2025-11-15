@@ -589,7 +589,7 @@ class BlePeriodicService : Service() {
             var iaq: Float? = null
             var gasResistance: Float? = null
 
-            if (hasBME690 && data.size >= 42) {
+            if (hasBME690 && data.size >= 38) {
                 temperature = buffer.getFloat(18)
                 humidity = buffer.getFloat(22)
                 pressure = buffer.getFloat(26)
@@ -602,7 +602,7 @@ class BlePeriodicService : Service() {
                 Log.d(TAG, "IAQ: $iaq")
                 Log.d(TAG, "Gas Resistance: $gasResistance Ω")
             } else {
-                Log.d(TAG, "No environmental data in this measurement (PM only)")
+                Log.d(TAG, "No environmental data in this measurement (PM only, size=${data.size})")
             }
 
             return AirQualitySensorClient.MeasurementData(
