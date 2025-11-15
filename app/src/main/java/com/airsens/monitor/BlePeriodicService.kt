@@ -544,45 +544,66 @@ class BlePeriodicService : Service() {
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
         Log.d(TAG, "Parsing ${data.size} bytes of data")
 
-        // NEW FORMAT: 20 bytes (was 38 bytes with environmental data)
-        // [0-3]:   timestamp (uint32_t)
-        // [4-7]:   pm10 (float)
-        // [8-11]:  pm25 (float)
-        // [12-15]: pm1 (float)
-        // [16]:    flags (uint8_t) - bit-packed
-        // [17-19]: iaq (uint16_t) + padding
-        if (data.size < 20) {
-            Log.w(TAG, "Measurement data too short: ${data.size} bytes (need at least 20)")
+        // CORRECTED FORMAT: Variable size - 22 bytes (PM only) OR 42 bytes (PM + environmental)
+        // [0]:     sensor_mask (uint8_t)
+        // [1-4]:   timestamp (uint32_t)
+        // [5-8]:   pm10 (float)
+        // [9-12]:  pm25 (float)
+        // [13-16]: pm1 (float)
+        // [17]:    flags (uint8_t) - bit-packed
+        // [18-41]: environmental data (if sensor_mask & 0x02)
+        if (data.size < 18) {
+            Log.w(TAG, "Measurement data too short: ${data.size} bytes (need at least 18)")
             return null
         }
 
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Read timestamp (4 bytes at offset 0-3, uint32)
-            val timestamp = buffer.getInt(0).toLong() and 0xFFFFFFFFL
+            // Read sensor mask (1 byte at offset 0)
+            val sensorMask = buffer.get(0).toInt() and 0xFF
+            val hasBME690 = (sensorMask and 0x02) != 0
+            Log.d(TAG, "Sensor mask: 0x${"%02X".format(sensorMask)}, hasBME690=$hasBME690")
+
+            // Read timestamp (4 bytes at offset 1-4, uint32)
+            val timestamp = buffer.getInt(1).toLong() and 0xFFFFFFFFL
             Log.d(TAG, "Timestamp: $timestamp")
 
             // Read PM values as floats (4 bytes each)
-            val pm10 = buffer.getFloat(4)
-            val pm25 = buffer.getFloat(8)
-            val pm1 = buffer.getFloat(12)
+            val pm10 = buffer.getFloat(5)
+            val pm25 = buffer.getFloat(9)
+            val pm1 = buffer.getFloat(13)
             Log.d(TAG, "PM values - PM1.0: $pm1, PM2.5: $pm25, PM10: $pm10")
 
-            // Read flags (1 byte at offset 16) - BIT-PACKED
-            val flags = buffer.get(16).toInt() and 0xFF
+            // Read flags (1 byte at offset 17) - BIT-PACKED
+            val flags = buffer.get(17).toInt() and 0xFF
             val obstructed = (flags and 0x01) != 0          // Bit 0
             val timeValid = (flags and 0x02) != 0           // Bit 1
             val iaqAccuracy = (flags shr 2) and 0x03        // Bits 2-3
             Log.d(TAG, "Flags: 0x${"%02X".format(flags)} - obstructed=$obstructed, timeValid=$timeValid, iaqAccuracy=$iaqAccuracy")
 
-            // Read IAQ (2 bytes at offset 17-18, uint16)
-            val iaq = if (data.size >= 19) {
-                (buffer.getShort(17).toInt() and 0xFFFF).toFloat()
+            // Read environmental data (if sensor_mask & 0x02)
+            var temperature: Float? = null
+            var humidity: Float? = null
+            var pressure: Float? = null
+            var iaq: Float? = null
+            var gasResistance: Float? = null
+
+            if (hasBME690 && data.size >= 42) {
+                temperature = buffer.getFloat(18)
+                humidity = buffer.getFloat(22)
+                pressure = buffer.getFloat(26)
+                iaq = buffer.getFloat(30)
+                gasResistance = buffer.getFloat(34)
+
+                Log.d(TAG, "Temperature: $temperature°C")
+                Log.d(TAG, "Humidity: $humidity%")
+                Log.d(TAG, "Pressure: $pressure Pa (${pressure/100} hPa)")
+                Log.d(TAG, "IAQ: $iaq")
+                Log.d(TAG, "Gas Resistance: $gasResistance Ω")
             } else {
-                null
+                Log.d(TAG, "No environmental data in this measurement (PM only)")
             }
-            Log.d(TAG, "IAQ: $iaq")
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
@@ -591,11 +612,11 @@ class BlePeriodicService : Service() {
                 pm10 = pm10,
                 obstructed = obstructed,
                 timeValid = timeValid,
-                temperature = null,  // No longer in real-time measurements
-                humidity = null,     // No longer in real-time measurements
-                pressure = null,     // No longer in real-time measurements
-                iaq = iaq,
-                gasResistance = null, // No longer in real-time measurements
+                temperature = if (temperature != null && !temperature.isNaN() && temperature in -50f..100f) temperature else null,
+                humidity = if (humidity != null && !humidity.isNaN() && humidity in 0f..100f) humidity else null,
+                pressure = if (pressure != null && !pressure.isNaN() && pressure in 30000f..120000f) (pressure / 100) else null,
+                iaq = if (iaq != null && !iaq.isNaN() && iaq in 0f..500f) iaq else null,
+                gasResistance = if (gasResistance != null && !gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
                 iaqAccuracy = iaqAccuracy
             )
         } catch (e: Exception) {
