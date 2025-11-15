@@ -720,57 +720,19 @@ class BlePeriodicService : Service() {
             return@suspendCancellableCoroutine
         }
 
-        // Set up callback for descriptor write completion
-        var onDescriptorWriteCallback: ((Int) -> Unit)? = null
-
-        val originalCallback = currentGatt?.callback
-        currentGatt?.callback = object : BluetoothGattCallback() {
-            override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-                onDescriptorWriteCallback?.invoke(status)
-            }
-
-            // Forward other callbacks to original
-            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                originalCallback?.onConnectionStateChange(gatt, status, newState)
-            }
-
-            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                originalCallback?.onServicesDiscovered(gatt, status)
-            }
-
-            override fun onCharacteristicRead(
-                gatt: BluetoothGatt,
-                characteristic: BluetoothGattCharacteristic,
-                value: ByteArray,
-                status: Int
-            ) {
-                originalCallback?.onCharacteristicRead(gatt, characteristic, value, status)
-            }
-
-            override fun onCharacteristicChanged(
-                gatt: BluetoothGatt,
-                characteristic: BluetoothGattCharacteristic,
-                value: ByteArray
-            ) {
-                originalCallback?.onCharacteristicChanged(gatt, characteristic, value)
-            }
-        }
-
-        onDescriptorWriteCallback = { status ->
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "DATA_RESPONSE indications enabled successfully")
-                continuation.resume(true) {}
-            } else {
-                Log.e(TAG, "Failed to enable DATA_RESPONSE indications, status=$status")
-                continuation.resume(false) {}
-            }
-        }
-
+        // Write to CCCD to enable indications
         descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
         val writeSuccess = gatt.writeDescriptor(descriptor)
-        Log.d(TAG, "Enabling DATA_RESPONSE indications: ${if (writeSuccess) "initiated" else "failed"}")
 
-        if (!writeSuccess) {
+        if (writeSuccess) {
+            Log.d(TAG, "DATA_RESPONSE indications write initiated successfully")
+            // Give the BLE stack time to complete the descriptor write
+            serviceScope.launch {
+                delay(100)
+                continuation.resume(true) {}
+            }
+        } else {
+            Log.e(TAG, "Failed to write DATA_RESPONSE CCCD descriptor")
             continuation.resume(false) {}
         }
     }
