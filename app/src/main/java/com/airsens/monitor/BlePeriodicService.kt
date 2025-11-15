@@ -33,7 +33,8 @@ class BlePeriodicService : Service() {
 
         private const val SCAN_TIMEOUT = 2000L           // 2 seconds max scan
         private const val CONNECTION_INTERVAL = 60000L   // 60 seconds between connections
-        private const val CONNECTION_TIMEOUT = 5000L     // 5 seconds max connection time
+        private const val CONNECTION_TIMEOUT = 10000L    // 10 seconds max connection time
+        private const val DISCONNECT_DELAY = 1000L       // 1 second delay after disconnect before cleanup
 
         val SERVICE_UUID: UUID = UUID.fromString("0000AAAA-0000-1000-8000-00805F9B34FB")
         val MEASUREMENT_UUID: UUID = UUID.fromString("0000AAA1-0000-1000-8000-00805F9B34FB")
@@ -185,6 +186,11 @@ class BlePeriodicService : Service() {
                 val count = readMeasurementCount(gatt)
                 Log.d(TAG, "Measurement count: $count")
 
+                if (count == 0) {
+                    Log.w(TAG, "No measurements available from ESP32. ESP32 may not have collected data yet or buffering is not implemented.")
+                    updateNotification("Waiting for data...")
+                }
+
                 if (count > 0) {
                     // 4. Read measurement data
                     updateNotification("Reading data...")
@@ -225,11 +231,8 @@ class BlePeriodicService : Service() {
                 }
 
             } finally {
-                // 7. Disconnect
-                gatt.disconnect()
-                gatt.close()
-                currentGatt = null
-                Log.d(TAG, "Disconnected")
+                // 7. Disconnect and cleanup
+                disconnectAndCleanup(gatt)
             }
 
         } catch (e: Exception) {
@@ -363,12 +366,20 @@ class BlePeriodicService : Service() {
 
     private suspend fun readMeasurementCount(gatt: BluetoothGatt): Int = suspendCancellableCoroutine { continuation ->
         val service = gatt.getService(SERVICE_UUID)
-        val characteristic = service?.getCharacteristic(MEASUREMENT_COUNT_UUID)
-
-        if (characteristic == null) {
+        if (service == null) {
+            Log.e(TAG, "Service $SERVICE_UUID not found on device!")
             continuation.resume(0) {}
             return@suspendCancellableCoroutine
         }
+
+        val characteristic = service.getCharacteristic(MEASUREMENT_COUNT_UUID)
+        if (characteristic == null) {
+            Log.e(TAG, "Characteristic $MEASUREMENT_COUNT_UUID not found in service!")
+            continuation.resume(0) {}
+            return@suspendCancellableCoroutine
+        }
+
+        Log.d(TAG, "Reading measurement count characteristic...")
 
         if (ActivityCompat.checkSelfPermission(
                 this,
@@ -528,5 +539,33 @@ class BlePeriodicService : Service() {
 
         characteristic.value = timeBytes
         gatt.writeCharacteristic(characteristic)
+    }
+
+    private suspend fun disconnectAndCleanup(gatt: BluetoothGatt) {
+        try {
+            if (ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                gatt.close()
+                currentGatt = null
+                return
+            }
+
+            Log.d(TAG, "Initiating disconnect...")
+            gatt.disconnect()
+
+            // Give BLE stack time to complete the disconnection
+            delay(DISCONNECT_DELAY)
+
+            gatt.close()
+            currentGatt = null
+            Log.d(TAG, "Disconnected and cleaned up")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during disconnect", e)
+            gatt.close()
+            currentGatt = null
+        }
     }
 }
