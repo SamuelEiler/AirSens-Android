@@ -330,13 +330,26 @@ class BlePeriodicService : Service() {
                 }
             }
 
+            // For Android API 33+
             override fun onCharacteristicRead(
                 gatt: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic,
                 value: ByteArray,
                 status: Int
             ) {
+                Log.d(TAG, "onCharacteristicRead (API 33+) called: ${value.size} bytes, status=$status")
                 onCharacteristicReadCallback?.invoke(value, status)
+            }
+
+            // For Android API < 33 (deprecated but still needed)
+            @Deprecated("Deprecated in API 33")
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                Log.d(TAG, "onCharacteristicRead (deprecated) called: ${characteristic.value?.size ?: 0} bytes, status=$status")
+                onCharacteristicReadCallback?.invoke(characteristic.value, status)
             }
         }
 
@@ -407,9 +420,12 @@ class BlePeriodicService : Service() {
 
         onCharacteristicReadCallback = { value, status ->
             if (status == BluetoothGatt.GATT_SUCCESS && continuation.isActive && value != null) {
+                Log.d(TAG, "Measurement data received: ${value.size} bytes")
+                Log.d(TAG, "First 20 bytes (hex): ${value.take(20).joinToString(" ") { "%02X".format(it) }}")
                 val measurement = parseMeasurementData(value)
                 continuation.resume(measurement) {}
             } else if (continuation.isActive) {
+                Log.w(TAG, "Measurement read failed: status=$status, value=${value?.size ?: "null"}")
                 continuation.resume(null) {}
             }
             onCharacteristicReadCallback = null
