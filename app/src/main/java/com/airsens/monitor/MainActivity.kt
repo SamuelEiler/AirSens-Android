@@ -99,6 +99,13 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         initializeBluetooth()
         checkPermissions()
         loadHistoricalData()
+        observeDatabaseChanges()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Reload data when user returns to the app
+        loadHistoricalData()
     }
 
     private fun initializeViews() {
@@ -252,91 +259,24 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         Toast.makeText(this, "Background monitoring stopped", Toast.LENGTH_SHORT).show()
     }
 
+    private fun observeDatabaseChanges() {
+        lifecycleScope.launch {
+            database.measurementDao().getAllFlow().collect { measurements ->
+                if (measurements.isNotEmpty()) {
+                    // Update UI with latest data
+                    updateUIWithMeasurements(measurements.take(MAX_CHART_ENTRIES))
+                }
+            }
+        }
+    }
+
     private fun loadHistoricalData() {
         lifecycleScope.launch {
             try {
                 // Load last 50 measurements from database
                 val measurements = database.measurementDao().getLastN(MAX_CHART_ENTRIES)
-
                 if (measurements.isNotEmpty()) {
-                    // Clear existing data
-                    pm10History.clear()
-                    pm25History.clear()
-                    pm1History.clear()
-                    temperatureHistory.clear()
-                    humidityHistory.clear()
-
-                    // Populate charts with historical data
-                    measurements.forEach { measurement ->
-                        val timestampMs = measurement.timestamp * 1000f
-
-                        pm10History.add(Entry(timestampMs, measurement.pm10))
-                        pm25History.add(Entry(timestampMs, measurement.pm25))
-                        pm1History.add(Entry(timestampMs, measurement.pm1))
-
-                        measurement.temperature?.let {
-                            temperatureHistory.add(Entry(timestampMs, it))
-                        }
-
-                        measurement.humidity?.let {
-                            humidityHistory.add(Entry(timestampMs, it))
-                        }
-                    }
-
-                    // Update charts on UI thread
-                    runOnUiThread {
-                        updateParticleMatterChart()
-                        updateTempHumidityChart()
-
-                        // Display the latest measurement data
-                        val latest = measurements.first()
-                        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                        val timestamp = Date(latest.timestamp * 1000)
-
-                        pm10Text.text = "PM10: %.2f µg/m³".format(latest.pm10)
-                        pm25Text.text = "PM2.5: %.2f µg/m³".format(latest.pm25)
-                        pm1Text.text = "PM1.0: %.2f µg/m³".format(latest.pm1)
-                        timestampText.text = "Last Update: ${dateFormat.format(timestamp)}"
-
-                        latest.temperature?.let {
-                            temperatureText.text = "Temperature: %.1f°C".format(it)
-                            temperatureText.visibility = View.VISIBLE
-                        }
-
-                        latest.humidity?.let {
-                            humidityText.text = "Humidity: %.1f%%".format(it)
-                            humidityText.visibility = View.VISIBLE
-                        }
-
-                        latest.pressure?.let {
-                            pressureText.text = "Pressure: %.1f hPa".format(it)
-                            pressureText.visibility = View.VISIBLE
-                        }
-
-                        latest.iaq?.let {
-                            iaqText.text = "IAQ: %.1f".format(it)
-                            iaqText.visibility = View.VISIBLE
-                        }
-
-                        latest.gasResistance?.let {
-                            gasResistanceText.text = "Gas Resistance: %.0f Ω".format(it)
-                            gasResistanceText.visibility = View.VISIBLE
-                        }
-
-                        obstructedText.text = if (latest.obstructed) "⚠ Sensor Obstructed" else "✓ Sensor Clear"
-                        obstructedText.setTextColor(
-                            if (latest.obstructed)
-                                ContextCompat.getColor(this@MainActivity, android.R.color.holo_red_dark)
-                            else
-                                ContextCompat.getColor(this@MainActivity, android.R.color.holo_green_dark)
-                        )
-
-                        iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(latest.iaqAccuracy)}"
-
-                        // Show data container if we have data
-                        dataContainer.visibility = View.VISIBLE
-                        statusText.text = "Loaded ${measurements.size} historical measurements"
-                    }
+                    updateUIWithMeasurements(measurements)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading historical data", e)
@@ -344,6 +284,87 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
                     Toast.makeText(this@MainActivity, "Error loading historical data", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    private fun updateUIWithMeasurements(measurements: List<com.airsens.monitor.database.MeasurementEntity>) {
+        // Clear existing data
+        pm10History.clear()
+        pm25History.clear()
+        pm1History.clear()
+        temperatureHistory.clear()
+        humidityHistory.clear()
+
+        // Populate charts with historical data
+        measurements.forEach { measurement ->
+            val timestampMs = measurement.timestamp * 1000f
+
+            pm10History.add(Entry(timestampMs, measurement.pm10))
+            pm25History.add(Entry(timestampMs, measurement.pm25))
+            pm1History.add(Entry(timestampMs, measurement.pm1))
+
+            measurement.temperature?.let {
+                temperatureHistory.add(Entry(timestampMs, it))
+            }
+
+            measurement.humidity?.let {
+                humidityHistory.add(Entry(timestampMs, it))
+            }
+        }
+
+        // Update charts on UI thread
+        runOnUiThread {
+            updateParticleMatterChart()
+            updateTempHumidityChart()
+
+            // Display the latest measurement data
+            val latest = measurements.first()
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            val timestamp = Date(latest.timestamp * 1000)
+
+            pm10Text.text = "PM10: %.2f µg/m³".format(latest.pm10)
+            pm25Text.text = "PM2.5: %.2f µg/m³".format(latest.pm25)
+            pm1Text.text = "PM1.0: %.2f µg/m³".format(latest.pm1)
+            timestampText.text = "Last Update: ${dateFormat.format(timestamp)}"
+
+            latest.temperature?.let {
+                temperatureText.text = "Temperature: %.1f°C".format(it)
+                temperatureText.visibility = View.VISIBLE
+            }
+
+            latest.humidity?.let {
+                humidityText.text = "Humidity: %.1f%%".format(it)
+                humidityText.visibility = View.VISIBLE
+            }
+
+            latest.pressure?.let {
+                pressureText.text = "Pressure: %.1f hPa".format(it)
+                pressureText.visibility = View.VISIBLE
+            }
+
+            latest.iaq?.let {
+                iaqText.text = "IAQ: %.1f".format(it)
+                iaqText.visibility = View.VISIBLE
+            }
+
+            latest.gasResistance?.let {
+                gasResistanceText.text = "Gas Resistance: %.0f Ω".format(it)
+                gasResistanceText.visibility = View.VISIBLE
+            }
+
+            obstructedText.text = if (latest.obstructed) "⚠ Sensor Obstructed" else "✓ Sensor Clear"
+            obstructedText.setTextColor(
+                if (latest.obstructed)
+                    ContextCompat.getColor(this@MainActivity, android.R.color.holo_red_dark)
+                else
+                    ContextCompat.getColor(this@MainActivity, android.R.color.holo_green_dark)
+            )
+
+            iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(latest.iaqAccuracy)}"
+
+            // Show data container if we have data
+            dataContainer.visibility = View.VISIBLE
+            statusText.text = "Loaded ${measurements.size} historical measurements"
         }
     }
 
