@@ -532,11 +532,14 @@ class BlePeriodicService : Service() {
         }
 
         val currentTime = System.currentTimeMillis() / 1000
+        Log.d(TAG, "Sending time sync: $currentTime (${java.util.Date(currentTime * 1000)})")
+
         val timeBytes = ByteBuffer.allocate(4)
             .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(currentTime.toInt())
             .array()
 
+        Log.d(TAG, "Time sync bytes (hex): ${timeBytes.joinToString(" ") { "%02X".format(it) }}")
         characteristic.value = timeBytes
         gatt.writeCharacteristic(characteristic)
     }
