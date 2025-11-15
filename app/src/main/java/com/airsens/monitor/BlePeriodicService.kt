@@ -34,11 +34,12 @@ class BlePeriodicService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "ble_periodic_channel"
 
-        private const val SCAN_TIMEOUT_SCREEN_ON = 2000L    // 2 seconds when screen is on
-        private const val SCAN_TIMEOUT_SCREEN_OFF = 10000L  // 10 seconds when screen is off
-        private const val CONNECTION_INTERVAL = 60000L   // 60 seconds between connections
-        private const val CONNECTION_TIMEOUT = 10000L    // 10 seconds max connection time
-        private const val DISCONNECT_DELAY = 1000L       // 1 second delay after disconnect before cleanup
+        private const val SCAN_TIMEOUT_SCREEN_ON = 2000L       // 2 seconds when screen is on
+        private const val SCAN_TIMEOUT_SCREEN_OFF = 10000L    // 10 seconds when screen is off
+        private const val CONNECTION_INTERVAL_FOREGROUND = 30000L   // 30 seconds when app in foreground
+        private const val CONNECTION_INTERVAL_BACKGROUND = 300000L  // 5 minutes when app in background
+        private const val CONNECTION_TIMEOUT = 10000L          // 10 seconds max connection time
+        private const val DISCONNECT_DELAY = 1000L             // 1 second delay after disconnect before cleanup
 
         val SERVICE_UUID: UUID = UUID.fromString("0000AAAA-0000-1000-8000-00805F9B34FB")
         val MEASUREMENT_UUID: UUID = UUID.fromString("0000AAA1-0000-1000-8000-00805F9B34FB")
@@ -157,7 +158,9 @@ class BlePeriodicService : Service() {
                     serviceScope.launch {
                         connectAndReadData()
                     }
-                    handler.postDelayed(this, CONNECTION_INTERVAL)
+                    // TODO: Make this adaptive based on app foreground/background state
+                    // For now, always use foreground interval (30s)
+                    handler.postDelayed(this, CONNECTION_INTERVAL_FOREGROUND)
                 }
             }
         }
