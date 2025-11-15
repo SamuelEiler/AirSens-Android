@@ -456,8 +456,8 @@ class BlePeriodicService : Service() {
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
         Log.d(TAG, "Parsing ${data.size} bytes of data")
 
-        if (data.size < 42) {  // Minimum size needed
-            Log.w(TAG, "Measurement data too short: ${data.size} bytes (need at least 42)")
+        if (data.size < 38) {  // Minimum size needed (flags changed from 5 bytes to 1, so 42-4=38)
+            Log.w(TAG, "Measurement data too short: ${data.size} bytes (need at least 38)")
             return null
         }
 
@@ -481,13 +481,13 @@ class BlePeriodicService : Service() {
             val timeValid = (flags and 0x02) != 0
             Log.d(TAG, "Flags: 0x${"%02X".format(flags)} - obstructed=$obstructed, timeValid=$timeValid")
 
-            // Environmental data starts at offset 22 (not 17!)
+            // Environmental data starts at offset 18 (flags changed from 5 bytes to 1 byte, shifting data by -4)
             // Order: Temperature, Humidity, Pressure, IAQ, Gas Resistance
-            val temperature = buffer.getFloat(22)
-            val humidity = buffer.getFloat(26)
-            val pressure = buffer.getFloat(30)
-            val iaq = buffer.getFloat(34)
-            val gasResistance = buffer.getFloat(38)
+            val temperature = buffer.getFloat(18)
+            val humidity = buffer.getFloat(22)
+            val pressure = buffer.getFloat(26)
+            val iaq = buffer.getFloat(30)
+            val gasResistance = buffer.getFloat(34)
 
             Log.d(TAG, "Temperature: $temperature°C")
             Log.d(TAG, "Humidity: $humidity%")
@@ -495,8 +495,8 @@ class BlePeriodicService : Service() {
             Log.d(TAG, "IAQ: $iaq")
             Log.d(TAG, "Gas Resistance: $gasResistance Ω")
 
-            // IAQ accuracy might be at offset 42 if available
-            val iaqAccuracy = if (data.size > 42) buffer.get(42).toInt() and 0xFF else 0
+            // IAQ accuracy at offset 38 (was 42 before flags size change)
+            val iaqAccuracy = if (data.size > 38) buffer.get(38).toInt() and 0xFF else 0
             Log.d(TAG, "IAQ Accuracy: $iaqAccuracy")
 
             return AirQualitySensorClient.MeasurementData(

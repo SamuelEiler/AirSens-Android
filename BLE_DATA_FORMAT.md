@@ -7,25 +7,25 @@ This document describes the binary data structure used for the MEASUREMENT chara
 
 The measurement characteristic returns **100 bytes** containing buffered measurement data from the ESP32 sensor.
 
-### Single Measurement Structure (42+ bytes)
+### Single Measurement Structure (38+ bytes)
 
 | Offset | Size | Type    | Field           | Description                                    | Example Value |
 |--------|------|---------|-----------------|------------------------------------------------|---------------|
-| 0-3    | 4    | uint32  | Timestamp       | Unix timestamp (seconds since epoch)           | 407877891     |
+| 0-3    | 4    | uint32  | Timestamp       | Unix timestamp (seconds since epoch)           | 1731679200    |
 | 4-5    | 2    | uint16  | PM1.0           | Particulate Matter 1.0 µg/m³                   | 105           |
 | 6-7    | 2    | -       | Reserved/Padding| Unknown or padding                             | -             |
 | 8-9    | 2    | uint16  | PM2.5           | Particulate Matter 2.5 µg/m³                   | 66            |
 | 10-11  | 2    | -       | Reserved/Padding| Unknown or padding                             | -             |
 | 12-13  | 2    | uint16  | PM10            | Particulate Matter 10 µg/m³                    | 65            |
 | 14-15  | 2    | -       | Reserved/Padding| Unknown or padding                             | -             |
-| 16     | 1    | uint8   | Flags           | Bit 0: Obstructed, Bit 1: Time Valid           | 0x41          |
-| 17-21  | 5    | -       | Reserved/Padding| Unknown or padding                             | -             |
-| 22-25  | 4    | float   | Temperature     | Temperature in °C                              | 25.33         |
-| 26-29  | 4    | float   | Humidity        | Relative humidity in %                         | 44.04         |
-| 30-33  | 4    | float   | Pressure        | Atmospheric pressure in **Pascals**            | 94408 (944 hPa)|
-| 34-37  | 4    | float   | IAQ             | Indoor Air Quality index (0-500)               | 75.54         |
-| 38-41  | 4    | float   | Gas Resistance  | Gas sensor resistance in Ohms                  | 21751         |
-| 42+    | ?    | uint8?  | IAQ Accuracy    | IAQ accuracy level (0-3)                       | 0             |
+| 16     | 1    | uint8   | Flags           | Bit 0: Obstructed, Bit 1: Time Valid           | 0x03          |
+| 17     | 1    | -       | Reserved/Padding| Padding byte for alignment                     | -             |
+| 18-21  | 4    | float   | Temperature     | Temperature in °C                              | 25.33         |
+| 22-25  | 4    | float   | Humidity        | Relative humidity in %                         | 44.04         |
+| 26-29  | 4    | float   | Pressure        | Atmospheric pressure in **Pascals**            | 94408 (944 hPa)|
+| 30-33  | 4    | float   | IAQ             | Indoor Air Quality index (0-500)               | 75.54         |
+| 34-37  | 4    | float   | Gas Resistance  | Gas sensor resistance in Ohms                  | 21751         |
+| 38+    | ?    | uint8?  | IAQ Accuracy    | IAQ accuracy level (0-3)                       | 0             |
 
 ## Important Notes
 
@@ -36,7 +36,7 @@ The measurement characteristic returns **100 bytes** containing buffered measure
 - Range: 0-65535 µg/m³
 
 ### Environmental Data
-- **Starts at offset 22**, not 17!
+- **Starts at offset 18** (after flags field was changed from 5 bytes to 1 byte)
 - All stored as IEEE 754 single-precision floats (4 bytes each)
 - Pressure is in **Pascals**, must be divided by 100 to get hPa/mbar
 - Temperature in Celsius, typical range: -50 to +100°C
@@ -77,7 +77,7 @@ Parsed as:
 
 ## Historical Changes
 
-### Previous Incorrect Assumptions
+### Initial Incorrect Assumptions (Pre-2025-11-15)
 The initial implementation incorrectly assumed:
 - PM values were stored as floats at offsets 4, 8, 12
 - Environmental data started at offset 17
@@ -85,8 +85,17 @@ The initial implementation incorrectly assumed:
 
 This led to garbage values like `PM2.5=-8.590002E9` and `Temp=3.59E-43`.
 
-### Correction (2025-11-15)
-After analyzing actual BLE characteristic data, the correct structure was determined:
-- PM values are uint16 integers
+### First Correction (2025-11-15)
+After analyzing actual BLE characteristic data, the structure was updated:
+- PM values are uint16 integers (not floats)
 - Environmental data starts at offset 22
+- Flags field was 5 bytes (offset 16-21)
 - Proper byte alignment with padding/reserved bytes
+
+### Second Correction (2025-11-15, later)
+ESP32 firmware changed flags field from 5 bytes to 1 byte:
+- Flags field now only 1 byte at offset 16
+- This shifted all environmental data by -4 bytes
+- Environmental data now starts at **offset 18** (was 22)
+- IAQ accuracy now at **offset 38** (was 42)
+- Minimum message size reduced to 38 bytes (was 42)
