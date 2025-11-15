@@ -443,7 +443,10 @@ class BlePeriodicService : Service() {
     }
 
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
-        if (data.size < 50) {
+        Log.d(TAG, "Parsing ${data.size} bytes of data")
+        Log.d(TAG, "All bytes (hex): ${data.joinToString(" ") { "%02X".format(it) }}")
+
+        if (data.size < 38) {  // Minimum size needed
             Log.w(TAG, "Measurement data too short: ${data.size} bytes")
             return null
         }
@@ -451,21 +454,43 @@ class BlePeriodicService : Service() {
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
+            // Read timestamp (4 bytes, uint32)
             val timestamp = buffer.getInt(0).toLong() and 0xFFFFFFFFL
+            Log.d(TAG, "Offset 0-3 [Timestamp]: $timestamp (0x${"%08X".format(timestamp)})")
+
+            // Read PM values - log both raw bytes and interpreted floats
+            val pm1Bytes = data.sliceArray(4..7)
+            val pm25Bytes = data.sliceArray(8..11)
+            val pm10Bytes = data.sliceArray(12..15)
+
             val pm1 = buffer.getFloat(4)
             val pm25 = buffer.getFloat(8)
             val pm10 = buffer.getFloat(12)
 
+            Log.d(TAG, "Offset 4-7 [PM1]: bytes=${pm1Bytes.joinToString(" ") { "%02X".format(it) }}, float=$pm1")
+            Log.d(TAG, "Offset 8-11 [PM2.5]: bytes=${pm25Bytes.joinToString(" ") { "%02X".format(it) }}, float=$pm25")
+            Log.d(TAG, "Offset 12-15 [PM10]: bytes=${pm10Bytes.joinToString(" ") { "%02X".format(it) }}, float=$pm10")
+
+            // Read flags (1 byte)
             val flags = buffer.get(16).toInt() and 0xFF
             val obstructed = (flags and 0x01) != 0
             val timeValid = (flags and 0x02) != 0
+            Log.d(TAG, "Offset 16 [Flags]: 0x${"%02X".format(flags)} - obstructed=$obstructed, timeValid=$timeValid")
 
-            val temperature = if (buffer.getFloat(17).isNaN()) null else buffer.getFloat(17)
-            val humidity = if (buffer.getFloat(21).isNaN()) null else buffer.getFloat(21)
-            val pressure = if (buffer.getFloat(25).isNaN()) null else buffer.getFloat(25)
-            val iaq = if (buffer.getFloat(29).isNaN()) null else buffer.getFloat(29)
-            val gasResistance = if (buffer.getFloat(33).isNaN()) null else buffer.getFloat(33)
+            // Read environmental data
+            val temperature = buffer.getFloat(17)
+            val humidity = buffer.getFloat(21)
+            val pressure = buffer.getFloat(25)
+            val iaq = buffer.getFloat(29)
+            val gasResistance = buffer.getFloat(33)
             val iaqAccuracy = buffer.get(37).toInt() and 0xFF
+
+            Log.d(TAG, "Offset 17-20 [Temp]: $temperature")
+            Log.d(TAG, "Offset 21-24 [Humidity]: $humidity")
+            Log.d(TAG, "Offset 25-28 [Pressure]: $pressure")
+            Log.d(TAG, "Offset 29-32 [IAQ]: $iaq")
+            Log.d(TAG, "Offset 33-36 [Gas]: $gasResistance")
+            Log.d(TAG, "Offset 37 [IAQ Accuracy]: $iaqAccuracy")
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
@@ -474,11 +499,11 @@ class BlePeriodicService : Service() {
                 pm10 = pm10,
                 obstructed = obstructed,
                 timeValid = timeValid,
-                temperature = temperature,
-                humidity = humidity,
-                pressure = pressure,
-                iaq = iaq,
-                gasResistance = gasResistance,
+                temperature = if (temperature.isNaN() || temperature < -50 || temperature > 100) null else temperature,
+                humidity = if (humidity.isNaN() || humidity < 0 || humidity > 100) null else humidity,
+                pressure = if (pressure.isNaN() || pressure < 300 || pressure > 1200) null else pressure,
+                iaq = if (iaq.isNaN() || iaq < 0 || iaq > 500) null else iaq,
+                gasResistance = if (gasResistance.isNaN() || gasResistance < 0) null else gasResistance,
                 iaqAccuracy = iaqAccuracy
             )
         } catch (e: Exception) {
