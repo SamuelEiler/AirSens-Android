@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -31,7 +32,8 @@ class BlePeriodicService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "ble_periodic_channel"
 
-        private const val SCAN_TIMEOUT = 2000L           // 2 seconds max scan
+        private const val SCAN_TIMEOUT_SCREEN_ON = 2000L    // 2 seconds when screen is on
+        private const val SCAN_TIMEOUT_SCREEN_OFF = 10000L  // 10 seconds when screen is off
         private const val CONNECTION_INTERVAL = 60000L   // 60 seconds between connections
         private const val CONNECTION_TIMEOUT = 10000L    // 10 seconds max connection time
         private const val DISCONNECT_DELAY = 1000L       // 1 second delay after disconnect before cleanup
@@ -51,6 +53,7 @@ class BlePeriodicService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var database: AppDatabase
+    private lateinit var powerManager: PowerManager
 
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothLeScanner: BluetoothLeScanner? = null
@@ -67,6 +70,7 @@ class BlePeriodicService : Service() {
         Log.d(TAG, "Service created")
 
         database = AppDatabase.getDatabase(applicationContext)
+        powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
 
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
@@ -253,8 +257,23 @@ class BlePeriodicService : Service() {
             return@suspendCancellableCoroutine
         }
 
+        // Check if screen is on and adjust scan mode accordingly
+        val isScreenOn = powerManager.isInteractive
+        val scanMode = if (isScreenOn) {
+            ScanSettings.SCAN_MODE_LOW_LATENCY
+        } else {
+            ScanSettings.SCAN_MODE_LOW_POWER
+        }
+        val scanTimeout = if (isScreenOn) {
+            SCAN_TIMEOUT_SCREEN_ON
+        } else {
+            SCAN_TIMEOUT_SCREEN_OFF
+        }
+
+        Log.d(TAG, "Starting BLE scan - Screen: ${if (isScreenOn) "ON" else "OFF"}, Mode: ${if (isScreenOn) "LOW_LATENCY" else "LOW_POWER"}, Timeout: ${scanTimeout}ms")
+
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(scanMode)
             .build()
 
         val callback = object : ScanCallback() {
@@ -285,13 +304,14 @@ class BlePeriodicService : Service() {
 
         bluetoothLeScanner?.startScan(null, settings, callback)
 
-        // Timeout after SCAN_TIMEOUT
+        // Timeout after scanTimeout (varies based on screen state)
         handler.postDelayed({
             bluetoothLeScanner?.stopScan(callback)
             if (continuation.isActive) {
+                Log.d(TAG, "BLE scan timeout reached")
                 continuation.resume(null) {}
             }
-        }, SCAN_TIMEOUT)
+        }, scanTimeout)
 
         continuation.invokeOnCancellation {
             bluetoothLeScanner?.stopScan(callback)
