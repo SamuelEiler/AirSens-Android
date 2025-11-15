@@ -5,6 +5,7 @@ import android.app.*
 import android.bluetooth.*
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -274,25 +275,26 @@ class BlePeriodicService : Service() {
             .setScanMode(scanMode)
             .build()
 
+        // Use scan filter to find device by name - this gets higher priority even when screen is off
+        val scanFilter = ScanFilter.Builder()
+            .setDeviceName(DEVICE_NAME)
+            .build()
+        val scanFilters = listOf(scanFilter)
+
+        Log.d(TAG, "Using scan filter for device name: $DEVICE_NAME")
+
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val device = result.device
-                if (ActivityCompat.checkSelfPermission(
-                        this@BlePeriodicService,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    val name = device.name ?: ""
-                    if (name.contains(DEVICE_NAME, ignoreCase = true)) {
-                        bluetoothLeScanner?.stopScan(this)
-                        if (continuation.isActive) {
-                            continuation.resume(device) {}
-                        }
-                    }
+                Log.d(TAG, "Device found in scan: ${result.device.address}")
+                // Filter already matched, so we can directly use this device
+                bluetoothLeScanner?.stopScan(this)
+                if (continuation.isActive) {
+                    continuation.resume(result.device) {}
                 }
             }
 
             override fun onScanFailed(errorCode: Int) {
+                Log.e(TAG, "BLE scan failed with error code: $errorCode")
                 bluetoothLeScanner?.stopScan(this)
                 if (continuation.isActive) {
                     continuation.resume(null) {}
@@ -300,7 +302,8 @@ class BlePeriodicService : Service() {
             }
         }
 
-        bluetoothLeScanner?.startScan(null, settings, callback)
+        // Start scan with filter - this tells Android we're looking for a specific device
+        bluetoothLeScanner?.startScan(scanFilters, settings, callback)
 
         // Timeout after scanTimeout (varies based on screen state)
         handler.postDelayed({
