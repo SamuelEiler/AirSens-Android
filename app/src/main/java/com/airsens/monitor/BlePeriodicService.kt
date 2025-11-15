@@ -158,9 +158,15 @@ class BlePeriodicService : Service() {
                     serviceScope.launch {
                         connectAndReadData()
                     }
-                    // TODO: Make this adaptive based on app foreground/background state
-                    // For now, always use foreground interval (30s)
-                    handler.postDelayed(this, CONNECTION_INTERVAL_FOREGROUND)
+                    // Use adaptive intervals based on screen state
+                    val isScreenOn = powerManager.isInteractive
+                    val interval = if (isScreenOn) {
+                        CONNECTION_INTERVAL_FOREGROUND  // 30 seconds when screen is on
+                    } else {
+                        CONNECTION_INTERVAL_BACKGROUND  // 5 minutes when screen is off
+                    }
+                    Log.d(TAG, "Scheduling next connection in ${interval/1000}s (screen ${if (isScreenOn) "ON" else "OFF"})")
+                    handler.postDelayed(this, interval)
                 }
             }
         }
