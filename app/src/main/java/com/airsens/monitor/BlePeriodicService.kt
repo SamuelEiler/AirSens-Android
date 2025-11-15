@@ -70,6 +70,7 @@ class BlePeriodicService : Service() {
     // Callbacks for GATT operations
     private var onCharacteristicReadCallback: ((ByteArray?, Int) -> Unit)? = null
     private var onCharacteristicChangedCallback: ((ByteArray?) -> Unit)? = null
+    private var onDescriptorWriteCallback: ((Boolean) -> Unit)? = null
 
     // Bulk data sync state
     private val receivedChunks = mutableListOf<AirQualitySensorClient.MeasurementData>()
@@ -493,6 +494,17 @@ class BlePeriodicService : Service() {
                     }
                 }
             }
+
+            // Handle descriptor write (for enabling indications)
+            override fun onDescriptorWrite(
+                gatt: BluetoothGatt,
+                descriptor: BluetoothGattDescriptor,
+                status: Int
+            ) {
+                Log.d(TAG, "onDescriptorWrite: descriptor=${descriptor.uuid}, status=$status (${getGattStatusString(status)})")
+                val success = status == BluetoothGatt.GATT_SUCCESS
+                onDescriptorWriteCallback?.invoke(success)
+            }
         }
 
         Log.d(TAG, "Calling device.connectGatt()")
@@ -720,20 +732,23 @@ class BlePeriodicService : Service() {
             return@suspendCancellableCoroutine
         }
 
+        // Set up callback for descriptor write completion
+        onDescriptorWriteCallback = { success ->
+            Log.d(TAG, "DATA_RESPONSE CCCD write completed: ${if (success) "SUCCESS" else "FAILED"}")
+            continuation.resume(success) {}
+            onDescriptorWriteCallback = null // Clear callback
+        }
+
         // Write to CCCD to enable indications
         descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
         val writeSuccess = gatt.writeDescriptor(descriptor)
 
-        if (writeSuccess) {
-            Log.d(TAG, "DATA_RESPONSE indications write initiated successfully")
-            // Give the BLE stack time to complete the descriptor write
-            serviceScope.launch {
-                delay(100)
-                continuation.resume(true) {}
-            }
-        } else {
-            Log.e(TAG, "Failed to write DATA_RESPONSE CCCD descriptor")
+        if (!writeSuccess) {
+            Log.e(TAG, "Failed to initiate DATA_RESPONSE CCCD descriptor write")
+            onDescriptorWriteCallback = null
             continuation.resume(false) {}
+        } else {
+            Log.d(TAG, "DATA_RESPONSE CCCD descriptor write initiated, waiting for callback...")
         }
     }
 
@@ -1004,8 +1019,8 @@ class BlePeriodicService : Service() {
                         return@launch
                     }
 
-                    // Small delay to ensure CCCD write completes
-                    delay(200)
+                    // Small delay after CCCD write to ensure indication handling is fully set up
+                    delay(300)
 
                     // Request bulk data
                     val requestSent = requestBulkData(gatt, startTime, endTime, maxRecords)
