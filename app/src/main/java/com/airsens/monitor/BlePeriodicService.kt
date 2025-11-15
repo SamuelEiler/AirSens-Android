@@ -691,7 +691,7 @@ class BlePeriodicService : Service() {
             ) != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "No BLUETOOTH_CONNECT permission, cannot enable indications")
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -700,7 +700,7 @@ class BlePeriodicService : Service() {
 
         if (dataResponseChar == null) {
             Log.w(TAG, "DATA_RESPONSE characteristic not found")
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -708,7 +708,7 @@ class BlePeriodicService : Service() {
         val success = gatt.setCharacteristicNotification(dataResponseChar, true)
         if (!success) {
             Log.e(TAG, "Failed to set characteristic notification for DATA_RESPONSE")
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -716,7 +716,7 @@ class BlePeriodicService : Service() {
         val descriptor = dataResponseChar.getDescriptor(CCCD_UUID)
         if (descriptor == null) {
             Log.w(TAG, "CCCD descriptor not found for DATA_RESPONSE characteristic")
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -759,10 +759,10 @@ class BlePeriodicService : Service() {
         onDescriptorWriteCallback = { status ->
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d(TAG, "DATA_RESPONSE indications enabled successfully")
-                continuation.resume(true)
+                continuation.resume(true) {}
             } else {
                 Log.e(TAG, "Failed to enable DATA_RESPONSE indications, status=$status")
-                continuation.resume(false)
+                continuation.resume(false) {}
             }
         }
 
@@ -771,7 +771,7 @@ class BlePeriodicService : Service() {
         Log.d(TAG, "Enabling DATA_RESPONSE indications: ${if (writeSuccess) "initiated" else "failed"}")
 
         if (!writeSuccess) {
-            continuation.resume(false)
+            continuation.resume(false) {}
         }
     }
 
@@ -793,7 +793,7 @@ class BlePeriodicService : Service() {
                 Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -802,7 +802,7 @@ class BlePeriodicService : Service() {
 
         if (dataRequestChar == null) {
             Log.w(TAG, "DATA_REQUEST characteristic not found")
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -824,10 +824,10 @@ class BlePeriodicService : Service() {
 
         if (writeSuccess) {
             Log.d(TAG, "Bulk data request sent successfully")
-            continuation.resume(true)
+            continuation.resume(true) {}
         } else {
             Log.e(TAG, "Failed to send bulk data request")
-            continuation.resume(false)
+            continuation.resume(false) {}
         }
     }
 
@@ -928,7 +928,7 @@ class BlePeriodicService : Service() {
                 Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -937,7 +937,7 @@ class BlePeriodicService : Service() {
 
         if (deleteRequestChar == null) {
             Log.w(TAG, "DELETE_REQUEST characteristic not found")
-            continuation.resume(false)
+            continuation.resume(false) {}
             return@suspendCancellableCoroutine
         }
 
@@ -957,10 +957,10 @@ class BlePeriodicService : Service() {
 
         if (writeSuccess) {
             Log.d(TAG, "Bulk data acknowledgment sent successfully")
-            continuation.resume(true)
+            continuation.resume(true) {}
         } else {
             Log.e(TAG, "Failed to send bulk data acknowledgment")
-            continuation.resume(false)
+            continuation.resume(false) {}
         }
     }
 
@@ -1029,7 +1029,7 @@ class BlePeriodicService : Service() {
                 // Set up completion callback
                 bulkSyncCompletionCallback = { measurements ->
                     Log.d(TAG, "Bulk sync callback triggered with ${measurements.size} measurements")
-                    continuation.resume(measurements)
+                    continuation.resume(measurements) {}
                 }
 
                 // Enable indications
@@ -1038,7 +1038,7 @@ class BlePeriodicService : Service() {
                     if (!indicationsEnabled) {
                         Log.e(TAG, "Failed to enable DATA_RESPONSE indications")
                         bulkSyncCompletionCallback = null
-                        continuation.resume(emptyList())
+                        continuation.resume(emptyList()) {}
                         return@launch
                     }
 
@@ -1050,7 +1050,7 @@ class BlePeriodicService : Service() {
                     if (!requestSent) {
                         Log.e(TAG, "Failed to send bulk data request")
                         bulkSyncCompletionCallback = null
-                        continuation.resume(emptyList())
+                        continuation.resume(emptyList()) {}
                         return@launch
                     }
 
@@ -1074,7 +1074,7 @@ class BlePeriodicService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error in performBulkDataSync", e)
                 bulkSyncCompletionCallback = null
-                continuation.resume(emptyList())
+                continuation.resume(emptyList()) {}
             }
         }
     } ?: run {
