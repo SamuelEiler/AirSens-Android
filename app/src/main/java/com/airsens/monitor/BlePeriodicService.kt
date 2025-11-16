@@ -616,8 +616,8 @@ class BlePeriodicService : Service() {
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        // Bulk data chunk received
-                        Log.d(TAG, "Received bulk data chunk: ${value.size} bytes")
+                        // Bulk data indication received (ACK sent automatically by BLE stack)
+                        Log.d(TAG, ">>> INDICATION RECEIVED: ${value.size} bytes (ACK auto-sent by Android BLE stack)")
                         handleBulkDataChunk(value)
                     }
                     else -> {
@@ -642,9 +642,9 @@ class BlePeriodicService : Service() {
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        // Bulk data chunk received (use deprecated value property)
+                        // Bulk data indication received (ACK sent automatically by BLE stack)
                         val value = characteristic.value
-                        Log.d(TAG, "Received bulk data chunk: ${value?.size ?: 0} bytes")
+                        Log.d(TAG, ">>> INDICATION RECEIVED (deprecated): ${value?.size ?: 0} bytes (ACK auto-sent by Android BLE stack)")
                         if (value != null) {
                             handleBulkDataChunk(value)
                         }
@@ -894,7 +894,12 @@ class BlePeriodicService : Service() {
 
         // Set up callback for descriptor write completion
         onDescriptorWriteCallback = { success ->
-            Log.d(TAG, "DATA_RESPONSE CCCD write completed: ${if (success) "SUCCESS" else "FAILED"}")
+            if (success) {
+                Log.i(TAG, "✓ DATA_RESPONSE CCCD write SUCCESS - Indications enabled on ESP32")
+                Log.i(TAG, "  ESP32 should now be ready to send indications and receive ACKs")
+            } else {
+                Log.e(TAG, "✗ DATA_RESPONSE CCCD write FAILED - Indications NOT enabled")
+            }
             continuation.resume(success) {}
             onDescriptorWriteCallback = null // Clear callback
         }
@@ -951,8 +956,10 @@ class BlePeriodicService : Service() {
             putShort(maxRecords.toShort())
         }.array()
 
-        Log.d(TAG, "Requesting bulk data: startTime=$startTime, endTime=$endTime, maxRecords=$maxRecords")
-        Log.d(TAG, "Request bytes (hex): ${requestData.joinToString(" ") { "%02X".format(it) }}")
+        Log.i(TAG, ">>> REQUESTING BULK DATA from ESP32")
+        Log.d(TAG, "    Range: startTime=$startTime, endTime=$endTime, maxRecords=$maxRecords")
+        Log.d(TAG, "    Request bytes (hex): ${requestData.joinToString(" ") { "%02X".format(it) }}")
+        Log.d(TAG, "    ESP32 should respond with indications on DATA_RESPONSE characteristic")
 
         dataRequestChar.value = requestData
         dataRequestChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -1119,8 +1126,9 @@ class BlePeriodicService : Service() {
                         return@launch
                     }
 
-                    // Small delay after CCCD write to ensure indication handling is fully set up
-                    delay(300)
+                    // Delay after CCCD write to ensure ESP32 processes the write before we request data
+                    // ESP32 needs time to update its CCCD state before sending indications
+                    delay(500)
 
                     // Request bulk data
                     val requestSent = requestBulkData(gatt, startTime, endTime, maxRecords)
