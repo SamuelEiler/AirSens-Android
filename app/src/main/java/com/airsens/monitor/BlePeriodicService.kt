@@ -27,6 +27,165 @@ import java.nio.ByteOrder
 import java.util.*
 import java.util.concurrent.CancellationException
 
+/**
+ * Builder for accumulating 3 packets into a complete measurement
+ * New ESP32 format sends each measurement as 3 sequential 20-byte packets
+ */
+data class MeasurementBuilder(
+    var timestamp: Long = 0,
+    var pm10: Float = 0f,
+    var pm25: Float = 0f,
+    var pm1: Float = 0f,
+    var obstructed: Boolean = false,
+    var timeValid: Boolean = false,
+    var iaqAccuracy: Int = 0,
+    var temperature: Float = 0f,
+    var humidity: Float = 0f,
+    var pressure: Float = 0f,
+    var iaq: Float = 0f,
+    var gasResistance: Float = 0f,
+    private var packetsReceived: Int = 0 // Bitmask: 0x01, 0x02, 0x04
+) {
+    fun isComplete(): Boolean = packetsReceived == 0x07 // All 3 bits set (packets 0, 1, 2)
+
+    fun toMeasurement(): AirQualitySensorClient.MeasurementData = AirQualitySensorClient.MeasurementData(
+        timestamp = timestamp,
+        pm1 = pm1,
+        pm25 = pm25,
+        pm10 = pm10,
+        obstructed = obstructed,
+        timeValid = timeValid,
+        temperature = if (temperature != 0f && !temperature.isNaN() && temperature in -50f..100f) temperature else null,
+        humidity = if (humidity != 0f && !humidity.isNaN() && humidity in 0f..100f) humidity else null,
+        pressure = if (pressure != 0f && !pressure.isNaN() && pressure in 30000f..120000f) (pressure / 100) else null,
+        iaq = if (iaq != 0f && !iaq.isNaN() && iaq in 0f..500f) iaq else null,
+        gasResistance = if (gasResistance != 0f && !gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
+        iaqAccuracy = iaqAccuracy
+    )
+
+    fun markPacketReceived(subPacket: Int) {
+        packetsReceived = packetsReceived or (1 shl subPacket)
+    }
+}
+
+/**
+ * Parser for new 3-packet measurement format
+ * Each measurement = 3 packets × 20 bytes
+ * Packet 0: Header + PM data
+ * Packet 1: Status + Environmental part 1
+ * Packet 2: Environmental part 2
+ */
+class BulkDataParser {
+    private val builders = mutableMapOf<Int, MeasurementBuilder>()
+    private val TAG = "BulkDataParser"
+
+    /**
+     * Parse a 20-byte packet and add it to the appropriate measurement builder
+     * @return Pair of (packetIndex, totalPackets) or null if parse error
+     */
+    fun parsePacket(data: ByteArray): Pair<Int, Int>? {
+        if (data.size < 20) {
+            Log.e(TAG, "Packet too small: ${data.size} bytes (need exactly 20)")
+            return null
+        }
+
+        val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+
+        // Header (present in ALL packets)
+        val packetIndex = buffer.getShort(0).toInt() and 0xFFFF
+        val totalPackets = buffer.getShort(2).toInt() and 0xFFFF
+
+        // Determine which measurement and sub-packet
+        val measurementIndex = packetIndex / 3
+        val subPacket = packetIndex % 3
+
+        Log.d(TAG, "Parsing packet $packetIndex/$totalPackets (measurement $measurementIndex, sub-packet $subPacket)")
+
+        // Get or create builder for this measurement
+        val builder = builders.getOrPut(measurementIndex) { MeasurementBuilder() }
+
+        try {
+            when (subPacket) {
+                0 -> {
+                    // Packet 0: PM data
+                    // [0-1]: packetIndex, [2-3]: totalPackets, [4-7]: timestamp, [8-11]: pm10, [12-15]: pm25, [16-19]: pm1
+                    builder.timestamp = buffer.getInt(4).toLong() and 0xFFFFFFFFL
+                    builder.pm10 = buffer.getFloat(8)
+                    builder.pm25 = buffer.getFloat(12)
+                    builder.pm1 = buffer.getFloat(16)
+                    builder.markPacketReceived(0)
+                    Log.d(TAG, "  Packet 0: timestamp=${builder.timestamp}, PM10=${builder.pm10}, PM2.5=${builder.pm25}, PM1=${builder.pm1}")
+                }
+                1 -> {
+                    // Packet 1: Flags + Environment part 1
+                    // [0-1]: packetIndex, [2]: marker, [3]: obstructed, [4]: timeValid, [5]: iaqAccuracy
+                    // [6-9]: temperature, [10-13]: humidity, [14-17]: pressure, [18-19]: reserved
+                    val marker = buffer.get(2).toInt() and 0xFF
+                    if (marker != 1) Log.w(TAG, "  Expected marker=1, got $marker")
+
+                    builder.obstructed = buffer.get(3).toInt() != 0
+                    builder.timeValid = buffer.get(4).toInt() != 0
+                    builder.iaqAccuracy = buffer.get(5).toInt() and 0xFF
+                    builder.temperature = buffer.getFloat(6)
+                    builder.humidity = buffer.getFloat(10)
+                    builder.pressure = buffer.getFloat(14)
+                    // Skip bytes 18-19
+                    builder.markPacketReceived(1)
+                    Log.d(TAG, "  Packet 1: obstructed=${builder.obstructed}, timeValid=${builder.timeValid}, temp=${builder.temperature}, humidity=${builder.humidity}, pressure=${builder.pressure}")
+                }
+                2 -> {
+                    // Packet 2: Environment part 2
+                    // [0-1]: packetIndex, [2]: marker, [3-6]: iaq, [7-10]: gasResistance, [11-19]: reserved
+                    val marker = buffer.get(2).toInt() and 0xFF
+                    if (marker != 2) Log.w(TAG, "  Expected marker=2, got $marker")
+
+                    builder.iaq = buffer.getFloat(3)
+                    builder.gasResistance = buffer.getFloat(7)
+                    // Skip bytes 11-19
+                    builder.markPacketReceived(2)
+                    Log.d(TAG, "  Packet 2: iaq=${builder.iaq}, gasResistance=${builder.gasResistance}")
+                }
+                else -> {
+                    Log.e(TAG, "Invalid sub-packet index: $subPacket")
+                    return null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing packet $packetIndex (sub-packet $subPacket)", e)
+            return null
+        }
+
+        return Pair(packetIndex, totalPackets)
+    }
+
+    /**
+     * Get all measurements that have received all 3 packets
+     * Removes completed measurements from internal map
+     */
+    fun getCompletedMeasurements(): List<AirQualitySensorClient.MeasurementData> {
+        val completed = builders.filter { it.value.isComplete() }
+            .map { it.value.toMeasurement() }
+            .sortedBy { it.timestamp }
+
+        // Remove completed measurements from map
+        builders.entries.removeIf { it.value.isComplete() }
+
+        if (completed.isNotEmpty()) {
+            Log.d(TAG, "Retrieved ${completed.size} completed measurements")
+        }
+
+        return completed
+    }
+
+    /**
+     * Clear all internal state
+     */
+    fun reset() {
+        builders.clear()
+        Log.d(TAG, "Parser reset")
+    }
+}
+
 class BlePeriodicService : Service() {
 
     companion object {
@@ -72,9 +231,10 @@ class BlePeriodicService : Service() {
     private var onCharacteristicChangedCallback: ((ByteArray?) -> Unit)? = null
     private var onDescriptorWriteCallback: ((Boolean) -> Unit)? = null
 
-    // Bulk data sync state
-    private val receivedChunks = mutableListOf<AirQualitySensorClient.MeasurementData>()
-    private var expectedTotalChunks = 0
+    // Bulk data sync state (new 3-packet format)
+    private val bulkDataParser = BulkDataParser()
+    private var expectedTotalPackets = 0
+    private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
     private var bulkSyncCompletionCallback: ((List<AirQualitySensorClient.MeasurementData>) -> Unit)? = null
 
     override fun onCreate() {
@@ -809,90 +969,16 @@ class BlePeriodicService : Service() {
     }
 
     /**
-     * Parse a data chunk received via indication on 0xAAA6
-     * Returns triple of (chunkIndex, totalChunks, measurementData)
+     * Parse a data packet received via indication on 0xAAA6
+     * New format: Each measurement = 3 packets × 20 bytes
+     * Returns pair of (packetIndex, totalPackets) or null if parse error
      */
-    private fun parseDataChunk(data: ByteArray): Triple<Int, Int, AirQualitySensorClient.MeasurementData?>? {
-        try {
-            if (data.size < 22) {
-                Log.w(TAG, "Data chunk too small: ${data.size} bytes (need at least 22)")
-                return null
-            }
+    private fun parseDataPacket(data: ByteArray): Pair<Int, Int>? {
+        // Log raw packet data for debugging
+        Log.d(TAG, "Raw packet (${data.size} bytes): ${data.joinToString(" ") { "%02X".format(it) }}")
 
-            val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-
-            // Parse chunk header (first 4 bytes)
-            val chunkIndex = buffer.getShort(0).toInt() and 0xFFFF
-            val totalChunks = buffer.getShort(2).toInt() and 0xFFFF
-
-            Log.d(TAG, "Parsing chunk $chunkIndex/$totalChunks (${data.size} bytes)")
-
-            // Parse measurement data (starts at offset 4)
-            // Format is same as regular measurement but without the chunk header
-            val sensorMask = buffer.get(4).toInt() and 0xFF
-            val hasBME690 = (sensorMask and 0x02) != 0
-
-            // Validate size
-            val expectedSize = if (hasBME690) 42 else 22
-            if (data.size < expectedSize) {
-                Log.w(TAG, "Chunk size mismatch: got ${data.size}, expected $expectedSize (hasBME690=$hasBME690)")
-                return null
-            }
-
-            // Read timestamp (4 bytes at offset 5-8)
-            val timestamp = buffer.getInt(5).toLong() and 0xFFFFFFFFL
-
-            // Read PM values as floats (4 bytes each at offsets 9, 13, 17)
-            val pm10 = buffer.getFloat(9)
-            val pm25 = buffer.getFloat(13)
-            val pm1 = buffer.getFloat(17)
-
-            // Read flags (1 byte at offset 21)
-            val flags = buffer.get(21).toInt() and 0xFF
-            val obstructed = (flags and 0x01) != 0
-            val timeValid = (flags and 0x02) != 0
-            val iaqAccuracy = (flags shr 2) and 0x03
-
-            // Read environmental data if present (offsets 22-41)
-            var temperature: Float? = null
-            var humidity: Float? = null
-            var pressure: Float? = null
-            var iaq: Float? = null
-            var gasResistance: Float? = null
-
-            if (hasBME690 && data.size >= 42) {
-                temperature = buffer.getFloat(22)
-                humidity = buffer.getFloat(26)
-                pressure = buffer.getFloat(30)
-                iaq = buffer.getFloat(34)
-                gasResistance = buffer.getFloat(38)
-
-                Log.d(TAG, "Chunk $chunkIndex: PM2.5=$pm25, Temp=$temperature, IAQ=$iaq")
-            } else {
-                Log.d(TAG, "Chunk $chunkIndex: PM2.5=$pm25 (PM only)")
-            }
-
-            val measurement = AirQualitySensorClient.MeasurementData(
-                timestamp = timestamp,
-                pm1 = pm1,
-                pm25 = pm25,
-                pm10 = pm10,
-                obstructed = obstructed,
-                timeValid = timeValid,
-                temperature = temperature,
-                humidity = humidity,
-                pressure = pressure,
-                iaq = iaq,
-                gasResistance = gasResistance,
-                iaqAccuracy = iaqAccuracy
-            )
-
-            return Triple(chunkIndex, totalChunks, measurement)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing data chunk", e)
-            return null
-        }
+        // Delegate to BulkDataParser
+        return bulkDataParser.parsePacket(data)
     }
 
     /**
@@ -942,48 +1028,61 @@ class BlePeriodicService : Service() {
     }
 
     /**
-     * Handle a bulk data chunk received via indication
-     * Collects chunks and triggers completion callback when all received
+     * Handle a bulk data packet received via indication
+     * New format: Each measurement = 3 packets × 20 bytes
+     * Collects packets and triggers completion callback when all received
      */
     private fun handleBulkDataChunk(data: ByteArray) {
-        val parsed = parseDataChunk(data) ?: run {
-            Log.e(TAG, "Failed to parse data chunk")
+        val parsed = parseDataPacket(data) ?: run {
+            Log.e(TAG, "Failed to parse data packet")
             return
         }
 
-        val (chunkIndex, totalChunks, measurement) = parsed
+        val (packetIndex, totalPackets) = parsed
 
-        if (chunkIndex == 0) {
-            // First chunk - initialize collection
-            Log.d(TAG, "Starting bulk data transfer: expecting $totalChunks chunks")
-            expectedTotalChunks = totalChunks
-            receivedChunks.clear()
+        if (packetIndex == 0) {
+            // First packet - initialize collection
+            Log.d(TAG, "Starting bulk data transfer: expecting $totalPackets packets")
+            expectedTotalPackets = totalPackets
+            accumulatedMeasurements.clear()
         }
 
-        // Add measurement if valid
-        if (measurement != null) {
-            receivedChunks.add(measurement)
-            Log.d(TAG, "Collected chunk ${receivedChunks.size}/$expectedTotalChunks")
-        } else {
-            Log.w(TAG, "Chunk $chunkIndex had no valid measurement data")
+        // Update progress
+        val progress = ((packetIndex + 1) * 100) / totalPackets
+        Log.d(TAG, "Progress: $progress% (packet ${packetIndex + 1}/$totalPackets)")
+
+        // Check for completed measurements after each packet
+        val completedMeasurements = bulkDataParser.getCompletedMeasurements()
+        if (completedMeasurements.isNotEmpty()) {
+            Log.i(TAG, "Completed ${completedMeasurements.size} measurements")
+            accumulatedMeasurements.addAll(completedMeasurements)
         }
 
-        // Check if transfer is complete
-        if (receivedChunks.size >= expectedTotalChunks) {
-            Log.d(TAG, "Bulk data transfer complete: ${receivedChunks.size} measurements received")
+        // Check if transfer is complete (all packets received)
+        if (packetIndex + 1 >= totalPackets) {
+            Log.i(TAG, "Bulk transfer complete! Received all $totalPackets packets")
 
-            // Trigger completion callback
+            // Get any remaining completed measurements
+            val finalMeasurements = bulkDataParser.getCompletedMeasurements()
+            if (finalMeasurements.isNotEmpty()) {
+                accumulatedMeasurements.addAll(finalMeasurements)
+            }
+
+            Log.d(TAG, "Total measurements received: ${accumulatedMeasurements.size}")
+
+            // Trigger completion callback with all accumulated measurements
             val callback = bulkSyncCompletionCallback
             if (callback != null) {
-                callback(receivedChunks.toList()) // Make a copy
-                bulkSyncCompletionCallback = null // Clear callback
+                callback(accumulatedMeasurements.toList()) // Make a copy
+                bulkSyncCompletionCallback = null
             } else {
                 Log.w(TAG, "Bulk data transfer completed but no callback registered")
             }
 
-            // Clear state for next transfer
-            receivedChunks.clear()
-            expectedTotalChunks = 0
+            // Reset parser and state for next transfer
+            bulkDataParser.reset()
+            accumulatedMeasurements.clear()
+            expectedTotalPackets = 0
         }
     }
 
@@ -1000,8 +1099,9 @@ class BlePeriodicService : Service() {
         suspendCancellableCoroutine { continuation ->
             try {
                 // Clear any previous state
-                receivedChunks.clear()
-                expectedTotalChunks = 0
+                accumulatedMeasurements.clear()
+                bulkDataParser.reset()
+                expectedTotalPackets = 0
 
                 // Set up completion callback
                 bulkSyncCompletionCallback = { measurements ->
@@ -1031,13 +1131,13 @@ class BlePeriodicService : Service() {
                         return@launch
                     }
 
-                    Log.d(TAG, "Bulk data request sent, waiting for chunks...")
+                    Log.d(TAG, "Bulk data request sent, waiting for packets...")
 
                     // If no data available, ESP32 won't send any indications
                     // Set a timeout to detect this case
                     serviceScope.launch {
-                        delay(5000) // 5 second timeout for first chunk
-                        if (expectedTotalChunks == 0 && receivedChunks.isEmpty()) {
+                        delay(5000) // 5 second timeout for first packet
+                        if (expectedTotalPackets == 0 && accumulatedMeasurements.isEmpty()) {
                             Log.d(TAG, "No bulk data received (timeout) - ESP32 may have no data in range")
                             val callback = bulkSyncCompletionCallback
                             if (callback != null) {
