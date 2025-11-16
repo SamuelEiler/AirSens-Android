@@ -628,8 +628,8 @@ class BlePeriodicService : Service() {
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        // Bulk data indication received (ACK sent automatically by BLE stack)
-                        Log.d(TAG, ">>> INDICATION RECEIVED: ${value.size} bytes (ACK auto-sent by Android BLE stack)")
+                        // Bulk data notification received (no ACK required)
+                        Log.d(TAG, ">>> NOTIFICATION RECEIVED: ${value.size} bytes")
                         handleBulkDataChunk(value)
                     }
                     else -> {
@@ -654,9 +654,9 @@ class BlePeriodicService : Service() {
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        // Bulk data indication received (ACK sent automatically by BLE stack)
+                        // Bulk data notification received (no ACK required)
                         val value = characteristic.value
-                        Log.d(TAG, ">>> INDICATION RECEIVED (deprecated): ${value?.size ?: 0} bytes (ACK auto-sent by Android BLE stack)")
+                        Log.d(TAG, ">>> NOTIFICATION RECEIVED (deprecated): ${value?.size ?: 0} bytes")
                         if (value != null) {
                             handleBulkDataChunk(value)
                         }
@@ -865,10 +865,11 @@ class BlePeriodicService : Service() {
     // ===== Bulk Data Sync Functions =====
 
     /**
-     * Enable indications on DATA_RESPONSE characteristic (0xAAA6)
+     * Enable notifications on DATA_RESPONSE characteristic (0xAAA6)
      * Must be called BEFORE requesting bulk data
+     * Using notifications (not indications) for faster transfer without ACKs
      */
-    private suspend fun enableDataResponseIndications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
+    private suspend fun enableDataResponseNotifications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -907,17 +908,18 @@ class BlePeriodicService : Service() {
         // Set up callback for descriptor write completion
         onDescriptorWriteCallback = { success ->
             if (success) {
-                Log.i(TAG, "✓ DATA_RESPONSE CCCD write SUCCESS - Indications enabled on ESP32")
-                Log.i(TAG, "  ESP32 should now be ready to send indications and receive ACKs")
+                Log.i(TAG, "✓ DATA_RESPONSE CCCD write SUCCESS - Notifications enabled on ESP32")
+                Log.i(TAG, "  ESP32 can now send notifications (no ACK required)")
             } else {
-                Log.e(TAG, "✗ DATA_RESPONSE CCCD write FAILED - Indications NOT enabled")
+                Log.e(TAG, "✗ DATA_RESPONSE CCCD write FAILED - Notifications NOT enabled")
             }
             continuation.resume(success) {}
             onDescriptorWriteCallback = null // Clear callback
         }
 
-        // Write to CCCD to enable indications
-        descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        // Write to CCCD to enable notifications (not indications)
+        // Notifications don't require ACKs, making them faster and simpler
+        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         val writeSuccess = gatt.writeDescriptor(descriptor)
 
         if (!writeSuccess) {
@@ -971,7 +973,7 @@ class BlePeriodicService : Service() {
         Log.i(TAG, ">>> REQUESTING BULK DATA from ESP32")
         Log.d(TAG, "    Range: startTime=$startTime, endTime=$endTime, maxRecords=$maxRecords")
         Log.d(TAG, "    Request bytes (hex): ${requestData.joinToString(" ") { "%02X".format(it) }}")
-        Log.d(TAG, "    ESP32 should respond with indications on DATA_RESPONSE characteristic")
+        Log.d(TAG, "    ESP32 should respond with notifications on DATA_RESPONSE characteristic")
 
         dataRequestChar.value = requestData
         dataRequestChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -1132,18 +1134,18 @@ class BlePeriodicService : Service() {
                     continuation.resume(measurements) {}
                 }
 
-                // Enable indications
+                // Enable notifications
                 serviceScope.launch {
-                    val indicationsEnabled = enableDataResponseIndications(gatt)
-                    if (!indicationsEnabled) {
-                        Log.e(TAG, "Failed to enable DATA_RESPONSE indications")
+                    val notificationsEnabled = enableDataResponseNotifications(gatt)
+                    if (!notificationsEnabled) {
+                        Log.e(TAG, "Failed to enable DATA_RESPONSE notifications")
                         bulkSyncCompletionCallback = null
                         continuation.resume(emptyList()) {}
                         return@launch
                     }
 
                     // Delay after CCCD write to ensure ESP32 processes the write before we request data
-                    // ESP32 needs time to update its CCCD state before sending indications
+                    // ESP32 needs time to update its CCCD state before sending notifications
                     delay(500)
 
                     // Request bulk data
