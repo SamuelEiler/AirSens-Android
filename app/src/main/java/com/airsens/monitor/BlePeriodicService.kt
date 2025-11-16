@@ -215,6 +215,7 @@ class BlePeriodicService : Service() {
         val SERVICE_UUID: UUID = UUID.fromString("0000AAAA-0000-1000-8000-00805F9B34FB")
         val MEASUREMENT_UUID: UUID = UUID.fromString("0000AAA1-0000-1000-8000-00805F9B34FB")
         val TIME_SYNC_UUID: UUID = UUID.fromString("0000AAA2-0000-1000-8000-00805F9B34FB")
+        val TIME_REQUEST_UUID: UUID = UUID.fromString("0000AAA4-0000-1000-8000-00805F9B34FB")
         val DATA_REQUEST_UUID: UUID = UUID.fromString("0000AAA5-0000-1000-8000-00805F9B34FB")
         val DATA_RESPONSE_UUID: UUID = UUID.fromString("0000AAA6-0000-1000-8000-00805F9B34FB")
         val DELETE_REQUEST_UUID: UUID = UUID.fromString("0000AAA7-0000-1000-8000-00805F9B34FB")
@@ -580,8 +581,8 @@ class BlePeriodicService : Service() {
                 if (status == BluetoothGatt.GATT_SUCCESS && continuation.isActive) {
                     Log.d(TAG, "Service discovery successful")
 
-                    // Enable indications for time sync characteristic (ESP32 will request time sync)
-                    enableTimeSyncIndications(gatt)
+                    // Enable indications for time request characteristic (ESP32 will request time sync)
+                    enableTimeRequestIndications(gatt)
 
                     continuation.resume(gatt) {}
                 } else if (continuation.isActive) {
@@ -621,8 +622,8 @@ class BlePeriodicService : Service() {
                 Log.d(TAG, "onCharacteristicChanged (API 33+): UUID=${characteristic.uuid}, ${value.size} bytes")
 
                 when (characteristic.uuid) {
-                    TIME_SYNC_UUID -> {
-                        Log.d(TAG, "ESP32 requesting time sync via indication")
+                    TIME_REQUEST_UUID -> {
+                        Log.i(TAG, "ESP32 requesting time sync via indication on TIME_REQUEST")
                         serviceScope.launch {
                             sendTimeSync(gatt)
                         }
@@ -647,8 +648,8 @@ class BlePeriodicService : Service() {
                 Log.d(TAG, "onCharacteristicChanged (deprecated): UUID=${characteristic.uuid}")
 
                 when (characteristic.uuid) {
-                    TIME_SYNC_UUID -> {
-                        Log.d(TAG, "ESP32 requesting time sync via indication")
+                    TIME_REQUEST_UUID -> {
+                        Log.i(TAG, "ESP32 requesting time sync via indication on TIME_REQUEST (deprecated)")
                         serviceScope.launch {
                             sendTimeSync(gatt)
                         }
@@ -1188,7 +1189,7 @@ class BlePeriodicService : Service() {
 
     // ===== End Bulk Data Sync Functions =====
 
-    private fun enableTimeSyncIndications(gatt: BluetoothGatt) {
+    private fun enableTimeRequestIndications(gatt: BluetoothGatt) {
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -1199,34 +1200,38 @@ class BlePeriodicService : Service() {
         }
 
         val service = gatt.getService(SERVICE_UUID)
-        val timeSyncChar = service?.getCharacteristic(TIME_SYNC_UUID)
+        val timeRequestChar = service?.getCharacteristic(TIME_REQUEST_UUID)
 
-        if (timeSyncChar == null) {
-            Log.w(TAG, "Time sync characteristic not found, cannot enable indications")
+        if (timeRequestChar == null) {
+            Log.w(TAG, "Time request characteristic (0xAAA4) not found, cannot enable indications")
             return
         }
 
         // Enable local notifications/indications
-        val success = gatt.setCharacteristicNotification(timeSyncChar, true)
+        val success = gatt.setCharacteristicNotification(timeRequestChar, true)
         if (!success) {
-            Log.e(TAG, "Failed to set characteristic notification")
+            Log.e(TAG, "Failed to set characteristic notification for time request")
             return
         }
 
         // Enable indications on the remote device by writing to CCCD
-        val descriptor = timeSyncChar.getDescriptor(CCCD_UUID)
+        val descriptor = timeRequestChar.getDescriptor(CCCD_UUID)
         if (descriptor != null) {
             descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
             val writeSuccess = gatt.writeDescriptor(descriptor)
-            Log.d(TAG, "Enabling time sync indications: ${if (writeSuccess) "success" else "failed"}")
+            Log.i(TAG, "Enabling TIME_REQUEST indications (0xAAA4): ${if (writeSuccess) "success" else "failed"}")
         } else {
-            Log.w(TAG, "CCCD descriptor not found for time sync characteristic")
+            Log.w(TAG, "CCCD descriptor not found for TIME_REQUEST characteristic")
         }
     }
 
     private suspend fun sendTimeSync(gatt: BluetoothGatt) {
         val service = gatt.getService(SERVICE_UUID)
-        val characteristic = service?.getCharacteristic(TIME_SYNC_UUID) ?: return
+        // Write timestamp to TIME_SYNC characteristic (0xAAA2), not TIME_REQUEST
+        val characteristic = service?.getCharacteristic(TIME_SYNC_UUID) ?: run {
+            Log.w(TAG, "TIME_SYNC characteristic (0xAAA2) not found")
+            return
+        }
 
         if (ActivityCompat.checkSelfPermission(
                 this,
@@ -1237,7 +1242,7 @@ class BlePeriodicService : Service() {
         }
 
         val currentTime = System.currentTimeMillis() / 1000
-        Log.d(TAG, "Sending time sync: $currentTime (${java.util.Date(currentTime * 1000)})")
+        Log.i(TAG, "Sending time sync to TIME_SYNC (0xAAA2): $currentTime (${java.util.Date(currentTime * 1000)})")
 
         val timeBytes = ByteBuffer.allocate(4)
             .order(ByteOrder.LITTLE_ENDIAN)
