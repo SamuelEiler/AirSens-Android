@@ -82,6 +82,7 @@ class BulkDataParser {
     /**
      * Parse a 20-byte packet and add it to the appropriate measurement builder
      * @return Pair of (packetIndex, totalPackets) or null if parse error
+     * Note: totalPackets is only valid for packet 0 (returns 0 for packets 1 and 2)
      */
     fun parsePacket(data: ByteArray): Pair<Int, Int>? {
         if (data.size < 20) {
@@ -91,15 +92,26 @@ class BulkDataParser {
 
         val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-        // Header (present in ALL packets)
+        // packetIndex is in ALL packets at bytes [0-1]
         val packetIndex = buffer.getShort(0).toInt() and 0xFFFF
-        val totalPackets = buffer.getShort(2).toInt() and 0xFFFF
 
         // Determine which measurement and sub-packet
         val measurementIndex = packetIndex / 3
         val subPacket = packetIndex % 3
 
-        Log.d(TAG, "Parsing packet $packetIndex/$totalPackets (measurement $measurementIndex, sub-packet $subPacket)")
+        // totalPackets is ONLY in packet 0 at bytes [2-3]
+        // For packets 1 and 2, bytes [2-3] contain different data (marker, flags)
+        val totalPackets = if (subPacket == 0) {
+            buffer.getShort(2).toInt() and 0xFFFF
+        } else {
+            0 // Will use cached value from handleBulkDataChunk
+        }
+
+        if (totalPackets > 0) {
+            Log.d(TAG, "Parsing packet $packetIndex/$totalPackets (measurement $measurementIndex, sub-packet $subPacket)")
+        } else {
+            Log.d(TAG, "Parsing packet $packetIndex (measurement $measurementIndex, sub-packet $subPacket)")
+        }
 
         // Get or create builder for this measurement
         val builder = builders.getOrPut(measurementIndex) { MeasurementBuilder() }
@@ -1045,18 +1057,22 @@ class BlePeriodicService : Service() {
             return
         }
 
-        val (packetIndex, totalPackets) = parsed
+        val (packetIndex, totalPacketsFromPacket) = parsed
 
-        if (packetIndex == 0) {
+        // Cache totalPackets from first packet (packet 0)
+        // For packets 1 and 2, totalPacketsFromPacket will be 0
+        if (packetIndex == 0 && totalPacketsFromPacket > 0) {
             // First packet - initialize collection
-            Log.d(TAG, "Starting bulk data transfer: expecting $totalPackets packets")
-            expectedTotalPackets = totalPackets
+            Log.d(TAG, "Starting bulk data transfer: expecting $totalPacketsFromPacket packets")
+            expectedTotalPackets = totalPacketsFromPacket
             accumulatedMeasurements.clear()
         }
 
-        // Update progress
-        val progress = ((packetIndex + 1) * 100) / totalPackets
-        Log.d(TAG, "Progress: $progress% (packet ${packetIndex + 1}/$totalPackets)")
+        // Use cached value for progress calculation
+        if (expectedTotalPackets > 0) {
+            val progress = ((packetIndex + 1) * 100) / expectedTotalPackets
+            Log.d(TAG, "Progress: $progress% (packet ${packetIndex + 1}/$expectedTotalPackets)")
+        }
 
         // Check for completed measurements after each packet
         val completedMeasurements = bulkDataParser.getCompletedMeasurements()
@@ -1066,8 +1082,8 @@ class BlePeriodicService : Service() {
         }
 
         // Check if transfer is complete (all packets received)
-        if (packetIndex + 1 >= totalPackets) {
-            Log.i(TAG, "Bulk transfer complete! Received all $totalPackets packets")
+        if (expectedTotalPackets > 0 && packetIndex + 1 >= expectedTotalPackets) {
+            Log.i(TAG, "Bulk transfer complete! Received all $expectedTotalPackets packets")
 
             // Get any remaining completed measurements
             val finalMeasurements = bulkDataParser.getCompletedMeasurements()
