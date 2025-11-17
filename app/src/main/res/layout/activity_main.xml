@@ -22,7 +22,7 @@
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/ready_to_scan"
+        android:text="Monitoring Air Quality..."
         android:textSize="16sp"
         android:textColor="#34495E"
         android:gravity="center"
@@ -31,63 +31,13 @@
         android:layout_marginBottom="16dp"
         android:elevation="2dp" />
 
-    <!-- Service Toggle Button -->
-    <Button
-        android:id="@+id/serviceToggleButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Start Background Monitoring"
-        android:textColor="@android:color/white"
-        android:backgroundTint="#27AE60"
-        android:layout_marginBottom="8dp" />
-
-    <!-- Button Container -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="16dp">
-
-        <Button
-            android:id="@+id/scanButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/scan_for_devices"
-            android:textColor="@android:color/white"
-            android:backgroundTint="#3498DB"
-            android:layout_marginEnd="8dp" />
-
-        <Button
-            android:id="@+id/disconnectButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/disconnect"
-            android:textColor="@android:color/white"
-            android:backgroundTint="#E74C3C"
-            android:enabled="false" />
-    </LinearLayout>
-
-    <!-- Device List View (visible when scanning/not connected) -->
-    <ListView
-        android:id="@+id/deviceListView"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:background="@android:color/white"
-        android:divider="#E0E0E0"
-        android:dividerHeight="1dp"
-        android:padding="8dp"
-        android:elevation="2dp" />
-
-    <!-- Data Display Container (visible when connected) -->
+    <!-- Data Display Container (always visible) -->
     <ScrollView
         android:id="@+id/dataContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:visibility="gone">
+        android:visibility="visible">
 
         <LinearLayout
             android:layout_width="match_parent"

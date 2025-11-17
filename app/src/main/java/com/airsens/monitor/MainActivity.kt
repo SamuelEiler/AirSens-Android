@@ -1,21 +1,10 @@
 package com.airsens.monitor
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
-import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.*
@@ -35,30 +24,18 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListener {
+class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private const val REQUEST_ENABLE_BT = 1
         private const val REQUEST_PERMISSIONS = 2
-        private const val SCAN_PERIOD: Long = 10000 // 10 seconds
         private const val MAX_CHART_ENTRIES = 50 // Max data points to show in history charts
     }
 
-    private lateinit var bluetoothAdapter: BluetoothAdapter
-    private lateinit var bluetoothLeScanner: BluetoothLeScanner
-    private var sensorClient: AirQualitySensorClient? = null
-    private var isScanning = false
-    private val handler = Handler(Looper.getMainLooper())
     private lateinit var database: AppDatabase
-    private var isServiceRunning = false
 
     // UI Components
     private lateinit var statusText: TextView
-    private lateinit var scanButton: Button
-    private lateinit var disconnectButton: Button
-    private lateinit var serviceToggleButton: Button
-    private lateinit var deviceListView: ListView
     private lateinit var dataContainer: ScrollView
 
     // Data display views
@@ -87,9 +64,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
     private val temperatureHistory = mutableListOf<Entry>()
     private val humidityHistory = mutableListOf<Entry>()
 
-    private val deviceList = mutableListOf<BluetoothDevice>()
-    private lateinit var deviceAdapter: ArrayAdapter<String>
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -102,7 +76,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         )
 
         initializeViews()
-        initializeBluetooth()
         checkPermissions()
         loadHistoricalData()
         observeDatabaseChanges()
@@ -116,10 +89,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
 
     private fun initializeViews() {
         statusText = findViewById(R.id.statusText)
-        scanButton = findViewById(R.id.scanButton)
-        disconnectButton = findViewById(R.id.disconnectButton)
-        serviceToggleButton = findViewById(R.id.serviceToggleButton)
-        deviceListView = findViewById(R.id.deviceListView)
         dataContainer = findViewById(R.id.dataContainer)
 
         // Measurement data views
@@ -142,52 +111,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
 
         // Initialize charts
         initializeCharts()
-
-        // Setup buttons
-        serviceToggleButton.setOnClickListener {
-            toggleBackgroundService()
-        }
-
-        scanButton.setOnClickListener {
-            if (!isScanning) {
-                startScan()
-            } else {
-                stopScan()
-            }
-        }
-
-        disconnectButton.setOnClickListener {
-            disconnect()
-        }
-
-        // Setup device list
-        deviceAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, mutableListOf())
-        deviceListView.adapter = deviceAdapter
-        deviceListView.setOnItemClickListener { _, _, position, _ ->
-            if (position < deviceList.size) {
-                connectToDevice(deviceList[position])
-            }
-        }
-
-        updateUIState(false)
-    }
-
-    private fun initializeBluetooth() {
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        bluetoothAdapter = bluetoothManager.adapter
-
-        if (!bluetoothAdapter.isEnabled) {
-            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT)
-            }
-        }
-
-        bluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner
     }
 
     private fun checkPermissions() {
@@ -226,43 +149,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         if (permissions.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, permissions.toTypedArray(), REQUEST_PERMISSIONS)
         }
-    }
-
-    private fun toggleBackgroundService() {
-        if (isServiceRunning) {
-            stopBackgroundService()
-        } else {
-            startBackgroundService()
-        }
-    }
-
-    private fun startBackgroundService() {
-        val intent = Intent(this, BlePeriodicService::class.java).apply {
-            action = BlePeriodicService.ACTION_START
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-
-        isServiceRunning = true
-        serviceToggleButton.text = "Stop Background Monitoring"
-        serviceToggleButton.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.holo_red_dark)
-        Toast.makeText(this, "Background monitoring started", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun stopBackgroundService() {
-        val intent = Intent(this, BlePeriodicService::class.java).apply {
-            action = BlePeriodicService.ACTION_STOP
-        }
-        startService(intent)
-
-        isServiceRunning = false
-        serviceToggleButton.text = "Start Background Monitoring"
-        serviceToggleButton.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.holo_green_dark)
-        Toast.makeText(this, "Background monitoring stopped", Toast.LENGTH_SHORT).show()
     }
 
     private fun observeDatabaseChanges() {
@@ -381,224 +267,6 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
                 Log.e(TAG, "Error updating UI with measurements", e)
                 Toast.makeText(this@MainActivity, "Error displaying data", Toast.LENGTH_SHORT).show()
             }
-        }
-    }
-
-    private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val device = result.device
-            if (ActivityCompat.checkSelfPermission(
-                    this@MainActivity,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                val deviceName = device.name ?: "Unknown"
-                Log.d(TAG, "Device found: $deviceName (${device.address})")
-
-                // Filter for our sensor device
-                if (deviceName.contains("BMV080", ignoreCase = true) ||
-                    deviceName.contains("AirSens", ignoreCase = true)
-                ) {
-                    if (!deviceList.contains(device)) {
-                        deviceList.add(device)
-                        runOnUiThread {
-                            deviceAdapter.add("$deviceName\n${device.address}")
-                            deviceAdapter.notifyDataSetChanged()
-                        }
-                    }
-                }
-            }
-        }
-
-        override fun onScanFailed(errorCode: Int) {
-            Log.e(TAG, "Scan failed with error: $errorCode")
-            runOnUiThread {
-                statusText.text = "Scan failed: $errorCode"
-                stopScan()
-            }
-        }
-    }
-
-    private fun startScan() {
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_SCAN
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            checkPermissions()
-            return
-        }
-
-        deviceList.clear()
-        deviceAdapter.clear()
-        deviceAdapter.notifyDataSetChanged()
-
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        bluetoothLeScanner.startScan(null, settings, scanCallback)
-        isScanning = true
-
-        statusText.text = "Scanning for devices..."
-        scanButton.text = "Stop Scan"
-
-        // Stop scan after period
-        handler.postDelayed({
-            stopScan()
-        }, SCAN_PERIOD)
-    }
-
-    private fun stopScan() {
-        if (!isScanning) return
-
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_SCAN
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            bluetoothLeScanner.stopScan(scanCallback)
-        }
-
-        isScanning = false
-        scanButton.text = "Scan for Devices"
-
-        if (deviceList.isEmpty()) {
-            statusText.text = "No devices found"
-        } else {
-            statusText.text = "Found ${deviceList.size} device(s)"
-        }
-    }
-
-    private fun connectToDevice(device: BluetoothDevice) {
-        stopScan()
-
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            checkPermissions()
-            return
-        }
-
-        statusText.text = "Connecting to ${device.name ?: device.address}..."
-
-        sensorClient = AirQualitySensorClient(this, this)
-        sensorClient?.connect(device)
-    }
-
-    private fun disconnect() {
-        sensorClient?.disconnect()
-        sensorClient = null
-        clearChartData()
-        updateUIState(false)
-        statusText.text = "Disconnected"
-    }
-
-    private fun updateUIState(connected: Boolean) {
-        scanButton.isEnabled = !connected
-        disconnectButton.isEnabled = connected
-        deviceListView.visibility = if (connected) View.GONE else View.VISIBLE
-        dataContainer.visibility = if (connected) View.VISIBLE else View.GONE
-    }
-
-    // SensorDataListener implementation
-    override fun onMeasurementReceived(data: AirQualitySensorClient.MeasurementData) {
-        runOnUiThread {
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            val timestamp = Date(data.timestamp * 1000)
-
-            pm10Text.text = "PM10: %.2f µg/m³".format(data.pm10)
-            pm25Text.text = "PM2.5: %.2f µg/m³".format(data.pm25)
-            pm1Text.text = "PM1.0: %.2f µg/m³".format(data.pm1)
-
-            // Add particle matter data to charts using timestamp as X value (in milliseconds)
-            val timestampMs = data.timestamp * 1000f
-            pm10History.add(Entry(timestampMs, data.pm10))
-            pm25History.add(Entry(timestampMs, data.pm25))
-            pm1History.add(Entry(timestampMs, data.pm1))
-
-            data.temperature?.let {
-                temperatureText.text = "Temperature: %.1f°C".format(it)
-                temperatureText.visibility = View.VISIBLE
-                // Add to chart
-                temperatureHistory.add(Entry(timestampMs, it))
-            } ?: run {
-                temperatureText.visibility = View.GONE
-            }
-
-            data.humidity?.let {
-                humidityText.text = "Humidity: %.1f%%".format(it)
-                humidityText.visibility = View.VISIBLE
-                // Add to chart
-                humidityHistory.add(Entry(timestampMs, it))
-            } ?: run {
-                humidityText.visibility = View.GONE
-            }
-
-            data.pressure?.let {
-                pressureText.text = "Pressure: %.1f hPa".format(it)
-                pressureText.visibility = View.VISIBLE
-            } ?: run {
-                pressureText.visibility = View.GONE
-            }
-
-            data.iaq?.let {
-                iaqText.text = "IAQ: %.1f".format(it)
-                iaqText.visibility = View.VISIBLE
-            } ?: run {
-                iaqText.visibility = View.GONE
-            }
-
-            data.gasResistance?.let {
-                gasResistanceText.text = "Gas Resistance: %.0f Ω".format(it)
-                gasResistanceText.visibility = View.VISIBLE
-            } ?: run {
-                gasResistanceText.visibility = View.GONE
-            }
-
-            timestampText.text = "Last Update: ${dateFormat.format(timestamp)}"
-            obstructedText.text = if (data.obstructed) "⚠ Sensor Obstructed" else "✓ Sensor Clear"
-            obstructedText.setTextColor(
-                if (data.obstructed)
-                    ContextCompat.getColor(this, android.R.color.holo_red_dark)
-                else
-                    ContextCompat.getColor(this, android.R.color.holo_green_dark)
-            )
-
-            iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(data.iaqAccuracy)}"
-
-            // Update charts
-            updateParticleMatterChart()
-            updateTempHumidityChart()
-        }
-    }
-
-    override fun onGasProfileReceived(data: AirQualitySensorClient.GasProfileData) {
-        runOnUiThread {
-            // Add to gas resistance chart
-            gasResistanceMap[data.heaterTemp] = data.gasResistance
-            updateGasResistanceChart()
-        }
-    }
-
-    override fun onConnectionStateChanged(connected: Boolean) {
-        runOnUiThread {
-            if (connected) {
-                statusText.text = "Connected - Receiving data..."
-                updateUIState(true)
-            } else {
-                statusText.text = "Disconnected"
-                updateUIState(false)
-            }
-        }
-    }
-
-    override fun onError(error: String) {
-        runOnUiThread {
-            statusText.text = "Error: $error"
-            Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -852,10 +520,7 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
 
     override fun onDestroy() {
         super.onDestroy()
-        sensorClient?.disconnect()
-        if (isScanning) {
-            stopScan()
-        }
+        // Lifecycle observer handles service lifecycle automatically
     }
 
     override fun onRequestPermissionsResult(
