@@ -444,11 +444,14 @@ class BlePeriodicService : Service() {
                     updateNotification("No new data")
                 }
 
-                // Note: Time sync is indication-based (ESP32 requests it via indication when needed)
-                // We no longer proactively send time sync
+                // 7. Proactively send time sync to ESP32
+                // Even though time sync is indication-based, we send it proactively during
+                // periodic connections to ensure ESP32 stays synchronized
+                Log.d(TAG, "Sending proactive time sync to ESP32")
+                sendTimeSync(gatt)
 
             } finally {
-                // 7. Disconnect and cleanup
+                // 8. Disconnect and cleanup
                 disconnectAndCleanup(gatt)
             }
 
