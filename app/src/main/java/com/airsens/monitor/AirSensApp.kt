@@ -17,10 +17,15 @@ class AirSensApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Application started")
+        Log.i(TAG, "========================================")
+        Log.i(TAG, "🚀 APPLICATION STARTING")
+        Log.i(TAG, "========================================")
 
         // Schedule periodic background sync with WorkManager
         schedulePeriodicSync()
+
+        // Log WorkManager status
+        logWorkManagerStatus()
     }
 
     private fun schedulePeriodicSync() {
@@ -46,6 +51,30 @@ class AirSensApp : Application() {
             syncRequest
         )
 
-        Log.i(TAG, "✓ Scheduled periodic background sync every 15 minutes")
+        Log.i(TAG, "========================================")
+        Log.i(TAG, "✓ WORKMANAGER SCHEDULED")
+        Log.i(TAG, "   Interval: Every 15 minutes")
+        Log.i(TAG, "   Work name: $WORK_NAME")
+        Log.i(TAG, "   Policy: KEEP (won't replace existing)")
+        Log.i(TAG, "========================================")
+    }
+
+    private fun logWorkManagerStatus() {
+        val workManager = WorkManager.getInstance(this)
+
+        // Get work info to check if it's scheduled
+        val workInfos = workManager.getWorkInfosForUniqueWork(WORK_NAME)
+        workInfos.get().forEach { workInfo ->
+            Log.i(TAG, "📊 WorkManager Work Info:")
+            Log.i(TAG, "   ID: ${workInfo.id}")
+            Log.i(TAG, "   State: ${workInfo.state}")
+            Log.i(TAG, "   Run attempt: ${workInfo.runAttemptCount}")
+
+            if (workInfo.state == WorkInfo.State.ENQUEUED) {
+                Log.i(TAG, "   ✓ Work is ENQUEUED and will run soon!")
+            } else {
+                Log.w(TAG, "   ⚠ Work state is ${workInfo.state}")
+            }
+        }
     }
 }
