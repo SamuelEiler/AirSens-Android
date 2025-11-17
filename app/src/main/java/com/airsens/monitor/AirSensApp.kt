@@ -13,6 +13,14 @@ class AirSensApp : Application() {
     companion object {
         private const val TAG = "AirSensApp"
         const val WORK_NAME = "sensor-periodic-sync"
+
+        init {
+            Log.i(TAG, "⚡ AirSensApp CLASS LOADED (static initializer)")
+        }
+    }
+
+    init {
+        Log.i(TAG, "🔨 AirSensApp INSTANCE CREATED (constructor)")
     }
 
     override fun onCreate() {
