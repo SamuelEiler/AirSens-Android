@@ -143,14 +143,23 @@ class SensorSyncWorker(
             .setDeviceName(DEVICE_NAME)
             .build()
 
+        var resumed = false
+        var timeoutJob: Job? = null
+
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
+                if (resumed) return
+                resumed = true
+                timeoutJob?.cancel()
                 Log.i(TAG, "Device found: ${result.device.address}")
                 scanner.stopScan(this)
                 continuation.resume(result.device)
             }
 
             override fun onScanFailed(errorCode: Int) {
+                if (resumed) return
+                resumed = true
+                timeoutJob?.cancel()
                 Log.e(TAG, "Scan failed: $errorCode")
                 scanner.stopScan(this)
                 continuation.resume(null)
@@ -161,10 +170,13 @@ class SensorSyncWorker(
         Log.d(TAG, "Scanning for device...")
 
         // Timeout
-        GlobalScope.launch {
+        timeoutJob = CoroutineScope(Dispatchers.IO).launch {
             delay(SCAN_TIMEOUT)
-            scanner.stopScan(callback)
-            continuation.resume(null)
+            if (!resumed) {
+                resumed = true
+                scanner.stopScan(callback)
+                continuation.resume(null)
+            }
         }
     }
 
