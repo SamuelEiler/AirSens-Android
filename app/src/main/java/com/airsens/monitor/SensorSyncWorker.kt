@@ -1,0 +1,384 @@
+package com.airsens.monitor
+
+import android.Manifest
+import android.bluetooth.*
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.PowerManager
+import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.airsens.monitor.database.AppDatabase
+import com.airsens.monitor.database.MeasurementEntity
+import kotlinx.coroutines.*
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.*
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
+/**
+ * WorkManager worker for background periodic sync
+ * Connects to ESP32, syncs bulk data, then disconnects
+ */
+class SensorSyncWorker(
+    private val context: Context,
+    params: WorkerParameters
+) : CoroutineWorker(context, params) {
+
+    companion object {
+        private const val TAG = "SensorSyncWorker"
+        private const val SCAN_TIMEOUT = 10000L
+        private const val CONNECTION_TIMEOUT = 30000L
+
+        val SERVICE_UUID: UUID = UUID.fromString("0000AAAA-0000-1000-8000-00805F9B34FB")
+        val TIME_SYNC_UUID: UUID = UUID.fromString("0000AAA2-0000-1000-8000-00805F9B34FB")
+        val TIME_REQUEST_UUID: UUID = UUID.fromString("0000AAA4-0000-1000-8000-00805F9B34FB")
+        val DATA_REQUEST_UUID: UUID = UUID.fromString("0000AAA5-0000-1000-8000-00805F9B34FB")
+        val DATA_RESPONSE_UUID: UUID = UUID.fromString("0000AAA6-0000-1000-8000-00805F9B34FB")
+        val DELETE_REQUEST_UUID: UUID = UUID.fromString("0000AAA7-0000-1000-8000-00805F9B34FB")
+        val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        const val DEVICE_NAME = "BMV080"
+    }
+
+    private lateinit var database: AppDatabase
+    private var currentGatt: BluetoothGatt? = null
+    private val bulkDataParser = BulkDataParser()
+    private var expectedTotalPackets = 0
+    private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
+
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        Log.i(TAG, "🔄 Background sync started")
+
+        database = AppDatabase.getDatabase(context)
+
+        // Acquire wake lock for BLE operations
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "AirQuality::SyncWakeLock"
+        )
+
+        try {
+            wakeLock.acquire(60000) // 60 second max
+
+            // 1. Scan for device
+            val device = scanForDevice()
+            if (device == null) {
+                Log.w(TAG, "Device not found during scan")
+                return@withContext Result.retry()
+            }
+
+            // 2. Connect and sync
+            val success = connectAndSync(device)
+
+            if (success) {
+                Log.i(TAG, "✓ Background sync successful")
+                Result.success()
+            } else {
+                Log.w(TAG, "⚠ Background sync failed")
+                Result.retry()
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Background sync error", e)
+            Result.retry()
+        } finally {
+            if (wakeLock.isHeld) {
+                wakeLock.release()
+            }
+            currentGatt?.close()
+            currentGatt = null
+        }
+    }
+
+    private suspend fun scanForDevice(): BluetoothDevice? = suspendCoroutine { continuation ->
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "No BLUETOOTH_SCAN permission")
+            continuation.resume(null)
+            return@suspendCoroutine
+        }
+
+        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothAdapter = bluetoothManager.adapter
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
+
+        if (scanner == null) {
+            Log.w(TAG, "BLE scanner not available")
+            continuation.resume(null)
+            return@suspendCoroutine
+        }
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
+            .build()
+
+        val scanFilter = ScanFilter.Builder()
+            .setDeviceName(DEVICE_NAME)
+            .build()
+
+        val callback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                Log.i(TAG, "Device found: ${result.device.address}")
+                scanner.stopScan(this)
+                continuation.resume(result.device)
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                Log.e(TAG, "Scan failed: $errorCode")
+                scanner.stopScan(this)
+                continuation.resume(null)
+            }
+        }
+
+        scanner.startScan(listOf(scanFilter), settings, callback)
+        Log.d(TAG, "Scanning for device...")
+
+        // Timeout
+        GlobalScope.launch {
+            delay(SCAN_TIMEOUT)
+            scanner.stopScan(callback)
+            continuation.resume(null)
+        }
+    }
+
+    private suspend fun connectAndSync(device: BluetoothDevice): Boolean = withTimeoutOrNull(CONNECTION_TIMEOUT) {
+        suspendCoroutine { continuation ->
+            if (ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                continuation.resume(false)
+                return@suspendCoroutine
+            }
+
+            val callback = object : BluetoothGattCallback() {
+                override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                    when (newState) {
+                        BluetoothProfile.STATE_CONNECTED -> {
+                            Log.i(TAG, "Connected, discovering services...")
+                            if (ActivityCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.BLUETOOTH_CONNECT
+                                ) == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                gatt.discoverServices()
+                            }
+                        }
+                        BluetoothProfile.STATE_DISCONNECTED -> {
+                            Log.i(TAG, "Disconnected")
+                        }
+                    }
+                }
+
+                override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        Log.i(TAG, "Services discovered, starting sync...")
+                        GlobalScope.launch {
+                            try {
+                                performSync(gatt)
+                                continuation.resume(true)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Sync failed", e)
+                                continuation.resume(false)
+                            } finally {
+                                delay(1000)
+                                gatt.disconnect()
+                            }
+                        }
+                    } else {
+                        Log.e(TAG, "Service discovery failed: $status")
+                        continuation.resume(false)
+                    }
+                }
+
+                override fun onCharacteristicChanged(
+                    gatt: BluetoothGatt,
+                    characteristic: BluetoothGattCharacteristic,
+                    value: ByteArray
+                ) {
+                    if (characteristic.uuid == DATA_RESPONSE_UUID) {
+                        handleDataPacket(value)
+                    }
+                }
+
+                @Deprecated("Deprecated in API 33")
+                override fun onCharacteristicChanged(
+                    gatt: BluetoothGatt,
+                    characteristic: BluetoothGattCharacteristic
+                ) {
+                    if (characteristic.uuid == DATA_RESPONSE_UUID) {
+                        characteristic.value?.let { handleDataPacket(it) }
+                    }
+                }
+            }
+
+            Log.i(TAG, "Connecting to device...")
+            currentGatt = device.connectGatt(context, false, callback)
+        }
+    } ?: false
+
+    private suspend fun performSync(gatt: BluetoothGatt) {
+        // 1. Send time sync
+        sendTimeSync(gatt)
+        delay(300)
+
+        // 2. Subscribe to DATA_RESPONSE
+        enableDataResponseNotifications(gatt)
+        delay(500)
+
+        // 3. Request bulk data
+        val lastSyncedTimestamp = database.measurementDao().getLatestTimestamp() ?: 0L
+        val currentTime = System.currentTimeMillis() / 1000
+        requestBulkData(gatt, lastSyncedTimestamp, currentTime)
+
+        // 4. Wait for all packets
+        delay(20000) // Wait up to 20 seconds for transfer
+
+        // 5. Save measurements
+        if (accumulatedMeasurements.isNotEmpty()) {
+            Log.i(TAG, "Saving ${accumulatedMeasurements.size} measurements")
+            val entities = accumulatedMeasurements.map { m ->
+                MeasurementEntity(
+                    timestamp = m.timestamp,
+                    receivedAt = System.currentTimeMillis(),
+                    pm1 = m.pm1,
+                    pm25 = m.pm25,
+                    pm10 = m.pm10,
+                    obstructed = m.obstructed,
+                    timeValid = m.timeValid,
+                    temperature = m.temperature,
+                    humidity = m.humidity,
+                    pressure = m.pressure,
+                    iaq = m.iaq,
+                    gasResistance = m.gasResistance,
+                    iaqAccuracy = m.iaqAccuracy
+                )
+            }
+            database.measurementDao().insertAll(entities)
+            database.measurementDao().keepOnlyLast(500)
+
+            // 6. Acknowledge
+            val maxTimestamp = accumulatedMeasurements.maxOf { it.timestamp }
+            acknowledgeBulkData(gatt, maxTimestamp)
+        }
+    }
+
+    private fun sendTimeSync(gatt: BluetoothGatt) {
+        val service = gatt.getService(SERVICE_UUID) ?: return
+        val characteristic = service.getCharacteristic(TIME_SYNC_UUID) ?: return
+
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        val currentTime = System.currentTimeMillis() / 1000
+        val timeBytes = ByteBuffer.allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(currentTime.toInt())
+            .array()
+
+        characteristic.value = timeBytes
+        gatt.writeCharacteristic(characteristic)
+        Log.i(TAG, "Sent time sync: $currentTime")
+    }
+
+    private fun enableDataResponseNotifications(gatt: BluetoothGatt) {
+        val service = gatt.getService(SERVICE_UUID) ?: return
+        val characteristic = service.getCharacteristic(DATA_RESPONSE_UUID) ?: return
+
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        gatt.setCharacteristicNotification(characteristic, true)
+
+        val descriptor = characteristic.getDescriptor(CCCD_UUID)
+        descriptor?.let {
+            it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            gatt.writeDescriptor(it)
+        }
+        Log.i(TAG, "Subscribed to DATA_RESPONSE notifications")
+    }
+
+    private fun requestBulkData(gatt: BluetoothGatt, startTime: Long, endTime: Long) {
+        val service = gatt.getService(SERVICE_UUID) ?: return
+        val characteristic = service.getCharacteristic(DATA_REQUEST_UUID) ?: return
+
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        val requestData = ByteBuffer.allocate(10).apply {
+            order(ByteOrder.LITTLE_ENDIAN)
+            putInt(startTime.toInt())
+            putInt(endTime.toInt())
+            putShort(100) // max 100 records
+        }.array()
+
+        characteristic.value = requestData
+        gatt.writeCharacteristic(characteristic)
+        Log.i(TAG, "Requested bulk data: $startTime to $endTime")
+    }
+
+    private fun acknowledgeBulkData(gatt: BluetoothGatt, maxTimestamp: Long) {
+        val service = gatt.getService(SERVICE_UUID) ?: return
+        val characteristic = service.getCharacteristic(DELETE_REQUEST_UUID) ?: return
+
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        val ackData = ByteBuffer.allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(maxTimestamp.toInt())
+            .array()
+
+        characteristic.value = ackData
+        gatt.writeCharacteristic(characteristic)
+        Log.i(TAG, "Acknowledged data up to: $maxTimestamp")
+    }
+
+    private fun handleDataPacket(data: ByteArray) {
+        val parsed = bulkDataParser.parsePacket(data) ?: return
+        val (packetIndex, totalPackets) = parsed
+
+        if (packetIndex == 0 && totalPackets > 0) {
+            expectedTotalPackets = totalPackets
+            accumulatedMeasurements.clear()
+            Log.i(TAG, "Starting transfer: $totalPackets packets")
+        }
+
+        val completed = bulkDataParser.getCompletedMeasurements()
+        if (completed.isNotEmpty()) {
+            accumulatedMeasurements.addAll(completed)
+            Log.d(TAG, "Completed measurements: ${accumulatedMeasurements.size}")
+        }
+
+        if (expectedTotalPackets > 0 && packetIndex + 1 >= expectedTotalPackets) {
+            val final = bulkDataParser.getCompletedMeasurements()
+            accumulatedMeasurements.addAll(final)
+            Log.i(TAG, "Transfer complete: ${accumulatedMeasurements.size} measurements")
+            bulkDataParser.reset()
+        }
+    }
+}

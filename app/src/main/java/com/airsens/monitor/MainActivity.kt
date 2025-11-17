@@ -22,6 +22,7 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
 import com.github.mikephil.charting.charts.BarChart
@@ -94,6 +95,11 @@ class MainActivity : AppCompatActivity(), AirQualitySensorClient.SensorDataListe
         setContentView(R.layout.activity_main)
 
         database = AppDatabase.getDatabase(applicationContext)
+
+        // Register lifecycle observer for automatic background/live mode switching
+        ProcessLifecycleOwner.get().lifecycle.addObserver(
+            AppLifecycleObserver(applicationContext)
+        )
 
         initializeViews()
         initializeBluetooth()
