@@ -19,6 +19,7 @@ import com.airsens.monitor.database.MeasurementEntity
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -54,7 +55,11 @@ class SensorSyncWorker(
     private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        Log.i(TAG, "🔄 Background sync started")
+        val startTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        Log.i(TAG, "========================================")
+        Log.i(TAG, "🔄 BACKGROUND SYNC STARTED")
+        Log.i(TAG, "   Time: $startTime")
+        Log.i(TAG, "========================================")
 
         database = AppDatabase.getDatabase(context)
 
@@ -79,15 +84,26 @@ class SensorSyncWorker(
             val success = connectAndSync(device)
 
             if (success) {
-                Log.i(TAG, "✓ Background sync successful")
+                val endTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                Log.i(TAG, "========================================")
+                Log.i(TAG, "✅ BACKGROUND SYNC SUCCESSFUL")
+                Log.i(TAG, "   Completed: $endTime")
+                Log.i(TAG, "   Next sync: ~15 minutes")
+                Log.i(TAG, "========================================")
                 Result.success()
             } else {
-                Log.w(TAG, "⚠ Background sync failed")
+                Log.w(TAG, "========================================")
+                Log.w(TAG, "⚠️ BACKGROUND SYNC FAILED - Will retry")
+                Log.w(TAG, "========================================")
                 Result.retry()
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Background sync error", e)
+            Log.e(TAG, "========================================")
+            Log.e(TAG, "❌ BACKGROUND SYNC ERROR")
+            Log.e(TAG, "   Error: ${e.message}")
+            Log.e(TAG, "   Will retry automatically")
+            Log.e(TAG, "========================================", e)
             Result.retry()
         } finally {
             if (wakeLock.isHeld) {
@@ -269,9 +285,14 @@ class SensorSyncWorker(
             database.measurementDao().insertAll(entities)
             database.measurementDao().keepOnlyLast(500)
 
+            val latest = accumulatedMeasurements.last()
+            Log.i(TAG, "💾 Saved ${accumulatedMeasurements.size} measurements to database")
+            Log.i(TAG, "   Latest: PM2.5=${String.format("%.1f", latest.pm25)} µg/m³, Temp=${latest.temperature}°C")
+
             // 6. Acknowledge
             val maxTimestamp = accumulatedMeasurements.maxOf { it.timestamp }
             acknowledgeBulkData(gatt, maxTimestamp)
+            Log.i(TAG, "✓ Acknowledged deletion up to timestamp $maxTimestamp")
         }
     }
 

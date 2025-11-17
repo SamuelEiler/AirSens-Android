@@ -64,7 +64,9 @@ class BleLiveConnectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Live connection service created")
+        Log.i(TAG, "========================================")
+        Log.i(TAG, "📱 LIVE CONNECTION SERVICE CREATED")
+        Log.i(TAG, "========================================")
 
         database = AppDatabase.getDatabase(applicationContext)
 
@@ -82,7 +84,10 @@ class BleLiveConnectionService : Service() {
                     startForeground(NOTIFICATION_ID, createNotification("Connecting..."))
                     isRunning = true
                     shouldReconnect = true
-                    Log.i(TAG, "▶ Live connection service started")
+                    Log.i(TAG, "========================================")
+                    Log.i(TAG, "▶️ LIVE CONNECTION MODE ACTIVATED")
+                    Log.i(TAG, "   App is open - maintaining persistent connection")
+                    Log.i(TAG, "========================================")
                     serviceScope.launch {
                         connectAndMaintain()
                     }
@@ -108,7 +113,10 @@ class BleLiveConnectionService : Service() {
         currentGatt?.close()
         currentGatt = null
         serviceScope.cancel()
-        Log.i(TAG, "⏹ Live connection service destroyed")
+        Log.i(TAG, "========================================")
+        Log.i(TAG, "⏹ LIVE CONNECTION MODE STOPPED")
+        Log.i(TAG, "   App closed - switching to background sync")
+        Log.i(TAG, "========================================")
     }
 
     private fun createNotificationChannel() {
@@ -175,7 +183,10 @@ class BleLiveConnectionService : Service() {
 
                 // Connection successful - stay connected until disconnected
                 updateNotification("Connected - Live monitoring")
-                Log.i(TAG, "✓ Connected successfully - monitoring live data")
+                Log.i(TAG, "========================================")
+                Log.i(TAG, "✅ LIVE CONNECTION ESTABLISHED")
+                Log.i(TAG, "   Receiving real-time measurements")
+                Log.i(TAG, "========================================")
 
                 // Wait for disconnection (connection is maintained in GATT callback)
                 // This coroutine will continue running until shouldReconnect becomes false
@@ -498,7 +509,7 @@ class BleLiveConnectionService : Service() {
             return
         }
 
-        Log.i(TAG, "Live measurement: PM2.5=${measurement.pm25}, Temp=${measurement.temperature}")
+        Log.i(TAG, "📊 Live measurement: PM2.5=${String.format("%.1f", measurement.pm25)} µg/m³, Temp=${measurement.temperature}°C")
 
         // Save to database
         serviceScope.launch {
