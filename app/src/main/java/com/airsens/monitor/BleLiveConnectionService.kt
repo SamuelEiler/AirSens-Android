@@ -69,6 +69,9 @@ class BleLiveConnectionService : Service() {
     private var isRunning = false
     private var shouldReconnect = false
 
+    // Callbacks for GATT operations
+    private var onDescriptorWriteCallback: ((Boolean) -> Unit)? = null
+
     // Bulk data sync state
     private val bulkDataParser = BulkDataParser()
     private var expectedTotalPackets = 0
@@ -442,6 +445,17 @@ class BleLiveConnectionService : Service() {
                         }
                     }
                 }
+            }
+
+            // Handle descriptor write (for enabling notifications/indications)
+            override fun onDescriptorWrite(
+                gatt: BluetoothGatt,
+                descriptor: BluetoothGattDescriptor,
+                status: Int
+            ) {
+                Log.d(TAG, "onDescriptorWrite: descriptor=${descriptor.uuid}, status=$status")
+                val success = status == BluetoothGatt.GATT_SUCCESS
+                onDescriptorWriteCallback?.invoke(success)
             }
         }
 
