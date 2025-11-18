@@ -330,14 +330,8 @@ class BlePeriodicService : Service() {
 
         Log.d(TAG, "Using scan filter for device name: $DEVICE_NAME")
 
-        // Create timeout runnable so we can cancel it later
-        val scanTimeoutRunnable = Runnable {
-            bluetoothLeScanner?.stopScan(callback)
-            if (continuation.isActive) {
-                Log.d(TAG, "BLE scan timeout reached")
-                continuation.resume(null) {}
-            }
-        }
+        // Use lateinit to handle circular reference between callback and timeout runnable
+        lateinit var scanTimeoutRunnable: Runnable
 
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -359,6 +353,15 @@ class BlePeriodicService : Service() {
                 if (continuation.isActive) {
                     continuation.resume(null) {}
                 }
+            }
+        }
+
+        // Create timeout runnable so we can cancel it later
+        scanTimeoutRunnable = Runnable {
+            bluetoothLeScanner?.stopScan(callback)
+            if (continuation.isActive) {
+                Log.d(TAG, "BLE scan timeout reached")
+                continuation.resume(null) {}
             }
         }
 
