@@ -11,10 +11,7 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.airsens.monitor.database.AppDatabase
 import com.github.mikephil.charting.charts.BarChart
 import com.github.mikephil.charting.charts.LineChart
@@ -72,11 +69,6 @@ class MainActivity : AppCompatActivity() {
 
         database = AppDatabase.getDatabase(applicationContext)
 
-        // Register lifecycle observer for automatic background/live mode switching
-        ProcessLifecycleOwner.get().lifecycle.addObserver(
-            AppLifecycleObserver(applicationContext)
-        )
-
         initializeViews()
         checkPermissions()
         loadHistoricalData()
@@ -92,12 +84,6 @@ class MainActivity : AppCompatActivity() {
     private fun initializeViews() {
         statusText = findViewById(R.id.statusText)
         dataContainer = findViewById(R.id.dataContainer)
-
-        // Debug test button
-        val testSyncButton = findViewById<Button>(R.id.testSyncButton)
-        testSyncButton.setOnClickListener {
-            triggerImmediateBackgroundSync()
-        }
 
         // Measurement data views
         pm10Text = findViewById(R.id.pm10Text)
@@ -119,23 +105,6 @@ class MainActivity : AppCompatActivity() {
 
         // Initialize charts
         initializeCharts()
-    }
-
-    private fun triggerImmediateBackgroundSync() {
-        Log.i(TAG, "🧪 User requested immediate background sync test")
-
-        // Create a one-time work request
-        val oneTimeSync = OneTimeWorkRequestBuilder<SensorSyncWorker>().build()
-
-        WorkManager.getInstance(this).enqueue(oneTimeSync)
-
-        Toast.makeText(
-            this,
-            "Background sync triggered! Check logs:\nadb logcat -s SensorSyncWorker:I",
-            Toast.LENGTH_LONG
-        ).show()
-
-        statusText.text = "Running background sync test..."
     }
 
     private fun checkPermissions() {

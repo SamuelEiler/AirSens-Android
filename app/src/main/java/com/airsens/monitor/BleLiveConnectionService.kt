@@ -26,8 +26,12 @@ import java.nio.ByteOrder
 import java.util.*
 
 /**
- * Foreground service for maintaining persistent BLE connection when app is open
- * Subscribes to MEASUREMENT characteristic (0xAAA1) for real-time data
+ * Foreground service for maintaining persistent BLE connection (industry standard)
+ * - Always connected (app open or closed) with auto-reconnect
+ * - Subscribes to MEASUREMENT characteristic (0xAAA1) for real-time data every 30s
+ * - Subscribes to DATA_RESPONSE characteristic (0xAAA6) for bulk data sync
+ * - Dynamic connection intervals (power-optimized by ESP32 firmware)
+ * - Instant data access when app opens
  */
 class BleLiveConnectionService : Service() {
 
@@ -43,6 +47,9 @@ class BleLiveConnectionService : Service() {
         val MEASUREMENT_UUID: UUID = UUID.fromString("0000AAA1-0000-1000-8000-00805F9B34FB")
         val TIME_SYNC_UUID: UUID = UUID.fromString("0000AAA2-0000-1000-8000-00805F9B34FB")
         val TIME_REQUEST_UUID: UUID = UUID.fromString("0000AAA4-0000-1000-8000-00805F9B34FB")
+        val DATA_REQUEST_UUID: UUID = UUID.fromString("0000AAA5-0000-1000-8000-00805F9B34FB")
+        val DATA_RESPONSE_UUID: UUID = UUID.fromString("0000AAA6-0000-1000-8000-00805F9B34FB")
+        val DELETE_REQUEST_UUID: UUID = UUID.fromString("0000AAA7-0000-1000-8000-00805F9B34FB")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         const val DEVICE_NAME = "BMV080"
@@ -61,6 +68,11 @@ class BleLiveConnectionService : Service() {
 
     private var isRunning = false
     private var shouldReconnect = false
+
+    // Bulk data sync state
+    private val bulkDataParser = BulkDataParser()
+    private var expectedTotalPackets = 0
+    private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
 
     override fun onCreate() {
         super.onCreate()
@@ -299,7 +311,7 @@ class BleLiveConnectionService : Service() {
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    Log.i(TAG, "Services discovered, subscribing to live measurements...")
+                    Log.i(TAG, "Services discovered, setting up persistent connection...")
 
                     // Enable time request indications
                     enableTimeRequestIndications(gatt)
@@ -310,22 +322,43 @@ class BleLiveConnectionService : Service() {
                         sendTimeSync(gatt)
                     }
 
-                    // Subscribe to live measurements
+                    // Subscribe to live measurements and bulk data
                     serviceScope.launch {
                         delay(500)
-                        val success = enableMeasurementNotifications(gatt)
-                        if (success) {
-                            Log.i(TAG, "✓ Subscribed to live MEASUREMENT notifications")
-                            if (continuation.isActive) {
-                                continuation.resume(gatt) {}
-                            }
-                        } else {
+
+                        // Subscribe to live MEASUREMENT notifications (real-time data every 30s)
+                        val measurementSuccess = enableMeasurementNotifications(gatt)
+                        if (!measurementSuccess) {
                             Log.e(TAG, "✗ Failed to subscribe to MEASUREMENT notifications")
                             gatt.disconnect()
                             if (continuation.isActive) {
                                 continuation.resume(null) {}
                             }
+                            return@launch
                         }
+                        Log.i(TAG, "✓ Subscribed to live MEASUREMENT notifications")
+
+                        delay(300)
+
+                        // Subscribe to DATA_RESPONSE notifications (bulk data transfer)
+                        val dataResponseSuccess = enableDataResponseNotifications(gatt)
+                        if (!dataResponseSuccess) {
+                            Log.e(TAG, "✗ Failed to subscribe to DATA_RESPONSE notifications")
+                            gatt.disconnect()
+                            if (continuation.isActive) {
+                                continuation.resume(null) {}
+                            }
+                            return@launch
+                        }
+                        Log.i(TAG, "✓ Subscribed to DATA_RESPONSE notifications")
+
+                        if (continuation.isActive) {
+                            continuation.resume(gatt) {}
+                        }
+
+                        // Request initial bulk data sync after connection established
+                        delay(500)
+                        requestInitialBulkData(gatt)
                     }
                 } else {
                     Log.e(TAG, "Service discovery failed: $status")
@@ -352,6 +385,10 @@ class BleLiveConnectionService : Service() {
                         Log.d(TAG, "Live measurement received: ${value.size} bytes")
                         handleLiveMeasurement(value)
                     }
+                    DATA_RESPONSE_UUID -> {
+                        Log.d(TAG, "Bulk data packet received: ${value.size} bytes")
+                        handleBulkDataPacket(value, gatt)
+                    }
                 }
             }
 
@@ -372,6 +409,13 @@ class BleLiveConnectionService : Service() {
                         if (value != null) {
                             Log.d(TAG, "Live measurement received (deprecated): ${value.size} bytes")
                             handleLiveMeasurement(value)
+                        }
+                    }
+                    DATA_RESPONSE_UUID -> {
+                        val value = characteristic.value
+                        if (value != null) {
+                            Log.d(TAG, "Bulk data packet received (deprecated): ${value.size} bytes")
+                            handleBulkDataPacket(value, gatt)
                         }
                     }
                 }
@@ -600,5 +644,239 @@ class BleLiveConnectionService : Service() {
             Log.e(TAG, "Error parsing measurement data", e)
             return null
         }
+    }
+
+    /**
+     * Enable DATA_RESPONSE notifications for bulk data transfer
+     */
+    private suspend fun enableDataResponseNotifications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val dataResponseChar = service?.getCharacteristic(DATA_RESPONSE_UUID)
+
+        if (dataResponseChar == null) {
+            Log.w(TAG, "DATA_RESPONSE characteristic not found")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
+
+        // Enable local notifications
+        val success = gatt.setCharacteristicNotification(dataResponseChar, true)
+        if (!success) {
+            Log.e(TAG, "Failed to set characteristic notification for DATA_RESPONSE")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
+
+        // Enable notifications on remote device via CCCD
+        val descriptor = dataResponseChar.getDescriptor(CCCD_UUID)
+        if (descriptor == null) {
+            Log.w(TAG, "CCCD descriptor not found for DATA_RESPONSE characteristic")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
+
+        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        val writeSuccess = gatt.writeDescriptor(descriptor)
+
+        if (writeSuccess) {
+            Log.i(TAG, "DATA_RESPONSE CCCD write initiated")
+            // Assume success - we'll know if notifications don't arrive
+            handler.postDelayed({
+                if (continuation.isActive) {
+                    continuation.resume(true) {}
+                }
+            }, 500)
+        } else {
+            Log.e(TAG, "Failed to write DATA_RESPONSE CCCD")
+            continuation.resume(false) {}
+        }
+    }
+
+    /**
+     * Request initial bulk data sync after connection
+     * Gets all data since last sync from database
+     */
+    private suspend fun requestInitialBulkData(gatt: BluetoothGatt) {
+        try {
+            val lastSyncedTimestamp = database.measurementDao().getLatestTimestamp() ?: 0L
+            val currentTime = System.currentTimeMillis() / 1000
+
+            Log.i(TAG, "📥 Requesting initial bulk data sync")
+            Log.d(TAG, "   Last synced: $lastSyncedTimestamp, Current: $currentTime")
+
+            requestBulkData(gatt, lastSyncedTimestamp, currentTime)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting initial bulk data", e)
+        }
+    }
+
+    /**
+     * Request bulk data from ESP32
+     */
+    private fun requestBulkData(gatt: BluetoothGatt, startTime: Long, endTime: Long, maxRecords: Int = 500) {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val dataRequestChar = service?.getCharacteristic(DATA_REQUEST_UUID)
+
+        if (dataRequestChar == null) {
+            Log.w(TAG, "DATA_REQUEST characteristic not found")
+            return
+        }
+
+        // Build 10-byte request: [start_time(4), end_time(4), max_records(2)]
+        val requestData = ByteBuffer.allocate(10).apply {
+            order(ByteOrder.LITTLE_ENDIAN)
+            putInt(startTime.toInt())
+            putInt(endTime.toInt())
+            putShort(maxRecords.toShort())
+        }.array()
+
+        Log.i(TAG, ">>> REQUESTING BULK DATA from ESP32")
+        Log.d(TAG, "    Range: startTime=$startTime, endTime=$endTime, maxRecords=$maxRecords")
+
+        dataRequestChar.value = requestData
+        gatt.writeCharacteristic(dataRequestChar)
+    }
+
+    /**
+     * Handle bulk data packet received via DATA_RESPONSE notification
+     * Uses 3-packet format parser
+     */
+    private fun handleBulkDataPacket(data: ByteArray, gatt: BluetoothGatt) {
+        val parsed = bulkDataParser.parsePacket(data) ?: run {
+            Log.e(TAG, "Failed to parse bulk data packet")
+            return
+        }
+
+        val (packetIndex, totalPackets) = parsed
+
+        // Initialize on first packet
+        if (packetIndex == 0 && totalPackets > 0) {
+            expectedTotalPackets = totalPackets
+            accumulatedMeasurements.clear()
+            Log.i(TAG, "Starting bulk transfer: $totalPackets packets")
+        }
+
+        // Check for completed measurements after each packet
+        val completedMeasurements = bulkDataParser.getCompletedMeasurements()
+        if (completedMeasurements.isNotEmpty()) {
+            Log.d(TAG, "Completed measurements: ${accumulatedMeasurements.size + completedMeasurements.size}")
+            accumulatedMeasurements.addAll(completedMeasurements)
+        }
+
+        // Check if transfer is complete
+        if (expectedTotalPackets > 0 && packetIndex + 1 >= expectedTotalPackets) {
+            Log.i(TAG, "Transfer complete: ${accumulatedMeasurements.size} measurements")
+
+            // Get any remaining completed measurements
+            val finalMeasurements = bulkDataParser.getCompletedMeasurements()
+            accumulatedMeasurements.addAll(finalMeasurements)
+
+            // Save to database
+            serviceScope.launch {
+                saveBulkMeasurements(gatt, accumulatedMeasurements.toList())
+            }
+
+            // Reset for next transfer
+            bulkDataParser.reset()
+            accumulatedMeasurements.clear()
+            expectedTotalPackets = 0
+        }
+    }
+
+    /**
+     * Save bulk measurements to database and acknowledge to ESP32
+     */
+    private suspend fun saveBulkMeasurements(gatt: BluetoothGatt, measurements: List<AirQualitySensorClient.MeasurementData>) {
+        if (measurements.isEmpty()) {
+            Log.d(TAG, "No measurements to save")
+            return
+        }
+
+        try {
+            Log.i(TAG, "💾 Saving ${measurements.size} measurements to database")
+
+            val entities = measurements.map { m ->
+                MeasurementEntity(
+                    timestamp = m.timestamp,
+                    receivedAt = System.currentTimeMillis(),
+                    pm1 = m.pm1,
+                    pm25 = m.pm25,
+                    pm10 = m.pm10,
+                    obstructed = m.obstructed,
+                    timeValid = m.timeValid,
+                    temperature = m.temperature,
+                    humidity = m.humidity,
+                    pressure = m.pressure,
+                    iaq = m.iaq,
+                    gasResistance = m.gasResistance,
+                    iaqAccuracy = m.iaqAccuracy
+                )
+            }
+
+            database.measurementDao().insertAll(entities)
+            database.measurementDao().keepOnlyLast(500)
+
+            val latest = measurements.last()
+            Log.i(TAG, "✓ Saved ${measurements.size} measurements")
+            Log.i(TAG, "   Latest: PM2.5=${String.format("%.1f", latest.pm25)} µg/m³, Temp=${latest.temperature}°C")
+
+            // Acknowledge to ESP32
+            val maxTimestamp = measurements.maxOf { it.timestamp }
+            acknowledgeBulkData(gatt, maxTimestamp)
+
+            updateNotification("Connected - ${measurements.size} measurements synced")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving bulk measurements", e)
+        }
+    }
+
+    /**
+     * Acknowledge bulk data transfer to ESP32
+     * Tells ESP32 to delete all measurements up to maxTimestamp
+     */
+    private fun acknowledgeBulkData(gatt: BluetoothGatt, maxTimestamp: Long) {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val service = gatt.getService(SERVICE_UUID)
+        val deleteRequestChar = service?.getCharacteristic(DELETE_REQUEST_UUID)
+
+        if (deleteRequestChar == null) {
+            Log.w(TAG, "DELETE_REQUEST characteristic not found")
+            return
+        }
+
+        // Build 4-byte acknowledgment: [max_timestamp(4)]
+        val ackData = ByteBuffer.allocate(4).apply {
+            order(ByteOrder.LITTLE_ENDIAN)
+            putInt(maxTimestamp.toInt())
+        }.array()
+
+        Log.i(TAG, "🗑 Acknowledging bulk data up to timestamp $maxTimestamp")
+
+        deleteRequestChar.value = ackData
+        gatt.writeCharacteristic(deleteRequestChar)
     }
 }
