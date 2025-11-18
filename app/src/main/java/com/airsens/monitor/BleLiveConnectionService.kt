@@ -74,6 +74,12 @@ class BleLiveConnectionService : Service() {
     private var expectedTotalPackets = 0
     private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
 
+    // Connection health monitoring
+    private var lastDataReceivedTime = 0L
+    private val connectionHealthCheckInterval = 60000L // Check every 60 seconds
+    private val connectionTimeoutMs = 120000L // 2 minutes without data = dead connection
+    private var healthCheckJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "========================================")
@@ -97,8 +103,10 @@ class BleLiveConnectionService : Service() {
                     isRunning = true
                     shouldReconnect = true
                     Log.i(TAG, "========================================")
-                    Log.i(TAG, "▶️ LIVE CONNECTION MODE ACTIVATED")
-                    Log.i(TAG, "   App is open - maintaining persistent connection")
+                    Log.i(TAG, "▶️ PERSISTENT CONNECTION ACTIVATED")
+                    Log.i(TAG, "   Maintaining always-on BLE connection")
+                    Log.i(TAG, "   Auto-reconnect: enabled")
+                    Log.i(TAG, "   Health monitoring: enabled")
                     Log.i(TAG, "========================================")
                     serviceScope.launch {
                         connectAndMaintain()
@@ -120,14 +128,14 @@ class BleLiveConnectionService : Service() {
         super.onDestroy()
         isRunning = false
         shouldReconnect = false
+        stopConnectionHealthCheck()
         handler.removeCallbacksAndMessages(null)
         currentGatt?.disconnect()
         currentGatt?.close()
         currentGatt = null
         serviceScope.cancel()
         Log.i(TAG, "========================================")
-        Log.i(TAG, "⏹ LIVE CONNECTION MODE STOPPED")
-        Log.i(TAG, "   App closed - switching to background sync")
+        Log.i(TAG, "⏹ LIVE CONNECTION SERVICE STOPPED")
         Log.i(TAG, "========================================")
     }
 
@@ -135,10 +143,10 @@ class BleLiveConnectionService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Live Air Quality Monitoring",
+                "Air Quality Sensor Connection",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Persistent BLE connection for real-time air quality data"
+                description = "Maintains persistent connection to air quality sensor"
                 setShowBadge(false)
             }
 
@@ -155,11 +163,12 @@ class BleLiveConnectionService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AirSens Monitor (Live)")
+            .setContentTitle("AirSens Monitor")
             .setContentText(status)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
@@ -434,10 +443,68 @@ class BleLiveConnectionService : Service() {
     }
 
     private suspend fun waitForDisconnection() {
-        disconnectionLatch?.await()
-        disconnectionLatch = null
-        currentGatt?.close()
-        currentGatt = null
+        try {
+            // Start connection health monitoring
+            startConnectionHealthCheck()
+
+            // Wait for disconnection with timeout (if no disconnect event after 5 minutes of inactivity, force reconnect)
+            withTimeoutOrNull(connectionTimeoutMs) {
+                disconnectionLatch?.await()
+            }
+        } finally {
+            // Stop health monitoring
+            stopConnectionHealthCheck()
+
+            disconnectionLatch = null
+            currentGatt?.close()
+            currentGatt = null
+            Log.d(TAG, "Cleaned up GATT connection")
+        }
+    }
+
+    /**
+     * Start monitoring connection health
+     * Forces reconnect if no data received within timeout
+     */
+    private fun startConnectionHealthCheck() {
+        lastDataReceivedTime = System.currentTimeMillis()
+
+        healthCheckJob?.cancel()
+        healthCheckJob = serviceScope.launch {
+            while (isActive && shouldReconnect) {
+                delay(connectionHealthCheckInterval)
+
+                val timeSinceLastData = System.currentTimeMillis() - lastDataReceivedTime
+
+                if (timeSinceLastData > connectionTimeoutMs) {
+                    Log.w(TAG, "⚠️ Connection appears dead (no data for ${timeSinceLastData}ms)")
+                    Log.w(TAG, "   Forcing disconnect and reconnect...")
+
+                    // Force disconnect to trigger reconnection
+                    currentGatt?.let { gatt ->
+                        if (ActivityCompat.checkSelfPermission(
+                                this@BleLiveConnectionService,
+                                Manifest.permission.BLUETOOTH_CONNECT
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            gatt.disconnect()
+                        }
+                    }
+
+                    // Complete the latch to unblock waitForDisconnection
+                    disconnectionLatch?.complete(Unit)
+                    break
+                }
+            }
+        }
+    }
+
+    /**
+     * Stop connection health monitoring
+     */
+    private fun stopConnectionHealthCheck() {
+        healthCheckJob?.cancel()
+        healthCheckJob = null
     }
 
     private suspend fun enableMeasurementNotifications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
@@ -548,6 +615,9 @@ class BleLiveConnectionService : Service() {
     }
 
     private fun handleLiveMeasurement(data: ByteArray) {
+        // Update connection health timestamp
+        lastDataReceivedTime = System.currentTimeMillis()
+
         val measurement = parseMeasurementData(data) ?: run {
             Log.w(TAG, "Failed to parse live measurement")
             return
@@ -759,6 +829,9 @@ class BleLiveConnectionService : Service() {
      * Uses 3-packet format parser
      */
     private fun handleBulkDataPacket(data: ByteArray, gatt: BluetoothGatt) {
+        // Update connection health timestamp
+        lastDataReceivedTime = System.currentTimeMillis()
+
         val parsed = bulkDataParser.parsePacket(data) ?: run {
             Log.e(TAG, "Failed to parse bulk data packet")
             return
