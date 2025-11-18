@@ -459,12 +459,30 @@ class BlePeriodicService : Service() {
             // Connection was cancelled (device disconnected before service discovery)
             Log.w(TAG, "Connection cancelled: ${e.message}")
             updateNotification("Connection failed")
-            currentGatt?.close()
+            currentGatt?.let { gatt ->
+                if (ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    gatt.disconnect()
+                }
+                gatt.close()
+            }
             currentGatt = null
         } catch (e: Exception) {
             Log.e(TAG, "Error in periodic connection", e)
             updateNotification("Error: ${e.message}")
-            currentGatt?.close()
+            currentGatt?.let { gatt ->
+                if (ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    gatt.disconnect()
+                }
+                gatt.close()
+            }
             currentGatt = null
         }
     }

@@ -320,8 +320,13 @@ class BleLiveConnectionService : Service() {
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        Log.w(TAG, "BLE disconnected")
-                        disconnectionLatch?.complete(Unit)
+                        Log.w(TAG, "BLE disconnected (status=$status)")
+                        // Complete the latch to signal disconnection
+                        // Use a small delay to ensure all callbacks finish
+                        serviceScope.launch {
+                            delay(100)
+                            disconnectionLatch?.complete(Unit)
+                        }
                         if (shouldReconnect) {
                             Log.i(TAG, "Connection lost, will attempt reconnect")
                             updateNotification("Disconnected, reconnecting...")
@@ -388,6 +393,7 @@ class BleLiveConnectionService : Service() {
                     }
                 } else {
                     Log.e(TAG, "Service discovery failed: $status")
+                    gatt.disconnect() // Trigger disconnect to clean up properly
                     if (continuation.isActive) {
                         continuation.resume(null) {}
                     }
@@ -463,6 +469,7 @@ class BleLiveConnectionService : Service() {
         val gatt = device.connectGatt(this, false, callback)
         if (gatt == null) {
             Log.e(TAG, "connectGatt() returned null - BLE stack unavailable")
+            disconnectionLatch = null // Clean up latch since connection failed
             if (continuation.isActive) {
                 continuation.cancel()
             }
@@ -472,6 +479,8 @@ class BleLiveConnectionService : Service() {
 
         continuation.invokeOnCancellation {
             Log.d(TAG, "Connection cancelled")
+            disconnectionLatch?.complete(Unit)
+            disconnectionLatch = null
             gatt.close()
             currentGatt = null
         }
@@ -491,7 +500,19 @@ class BleLiveConnectionService : Service() {
             stopConnectionHealthCheck()
 
             disconnectionLatch = null
-            currentGatt?.close()
+
+            // Ensure we disconnect before closing
+            currentGatt?.let { gatt ->
+                if (ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    gatt.disconnect()
+                    delay(200) // Give time for disconnect to complete
+                }
+                gatt.close()
+            }
             currentGatt = null
             Log.d(TAG, "Cleaned up GATT connection")
         }
