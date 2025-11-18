@@ -610,6 +610,7 @@ class BleLiveConnectionService : Service() {
             .array()
 
         characteristic.value = timeBytes
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT // Patient write with response
         gatt.writeCharacteristic(characteristic)
         Log.i(TAG, "Sent time sync: $currentTime")
     }
@@ -821,6 +822,7 @@ class BleLiveConnectionService : Service() {
         Log.d(TAG, "    Range: startTime=$startTime, endTime=$endTime, maxRecords=$maxRecords")
 
         dataRequestChar.value = requestData
+        dataRequestChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT // Patient write with response
         gatt.writeCharacteristic(dataRequestChar)
     }
 
@@ -950,6 +952,7 @@ class BleLiveConnectionService : Service() {
         Log.i(TAG, "🗑 Acknowledging bulk data up to timestamp $maxTimestamp")
 
         deleteRequestChar.value = ackData
+        deleteRequestChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT // Patient write with response
         gatt.writeCharacteristic(deleteRequestChar)
     }
 }
