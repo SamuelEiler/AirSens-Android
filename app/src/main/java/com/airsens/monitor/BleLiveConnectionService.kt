@@ -321,6 +321,13 @@ class BleLiveConnectionService : Service() {
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         Log.w(TAG, "BLE disconnected (status=$status)")
+
+                        // If we disconnect before service discovery completes, cancel the connection attempt
+                        if (continuation.isActive) {
+                            Log.w(TAG, "Disconnected during connection/discovery - cancelling connection attempt")
+                            continuation.cancel()
+                        }
+
                         // Complete the latch to signal disconnection
                         // Use a small delay to ensure all callbacks finish
                         serviceScope.launch {
