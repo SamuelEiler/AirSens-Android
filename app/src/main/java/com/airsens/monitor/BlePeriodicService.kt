@@ -353,16 +353,18 @@ class BlePeriodicService : Service() {
         bluetoothLeScanner?.startScan(scanFilters, settings, callback)
 
         // Timeout after scanTimeout (varies based on screen state)
-        handler.postDelayed({
+        val timeoutCallback = Runnable {
             bluetoothLeScanner?.stopScan(callback)
             if (continuation.isActive) {
                 Log.d(TAG, "BLE scan timeout reached")
                 continuation.resume(null) {}
             }
-        }, scanTimeout)
+        }
+        handler.postDelayed(timeoutCallback, scanTimeout)
 
         continuation.invokeOnCancellation {
             bluetoothLeScanner?.stopScan(callback)
+            handler.removeCallbacks(timeoutCallback)
         }
     }
 
@@ -509,6 +511,13 @@ class BlePeriodicService : Service() {
 
         Log.d(TAG, "Calling device.connectGatt()")
         val gatt = device.connectGatt(this, false, callback)
+
+        if (gatt == null) {
+            Log.e(TAG, "connectGatt() returned null - connection failed")
+            continuation.cancel(CancellationException("connectGatt() returned null"))
+            return@suspendCancellableCoroutine
+        }
+
         currentGatt = gatt
 
         continuation.invokeOnCancellation {
@@ -556,12 +565,17 @@ class BlePeriodicService : Service() {
         gatt.readCharacteristic(characteristic)
 
         // Timeout
-        handler.postDelayed({
+        val timeoutCallback = Runnable {
             if (continuation.isActive) {
                 onCharacteristicReadCallback = null
                 continuation.resume(0) {}
             }
-        }, 3000)
+        }
+        handler.postDelayed(timeoutCallback, 3000)
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutCallback)
+        }
     }
 
     private suspend fun readMeasurement(gatt: BluetoothGatt): AirQualitySensorClient.MeasurementData? = suspendCancellableCoroutine { continuation ->
@@ -598,12 +612,17 @@ class BlePeriodicService : Service() {
         gatt.readCharacteristic(characteristic)
 
         // Timeout
-        handler.postDelayed({
+        val timeoutCallback = Runnable {
             if (continuation.isActive) {
                 onCharacteristicReadCallback = null
                 continuation.resume(null) {}
             }
-        }, 3000)
+        }
+        handler.postDelayed(timeoutCallback, 3000)
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutCallback)
+        }
     }
 
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
@@ -735,8 +754,19 @@ class BlePeriodicService : Service() {
         // Set up callback for descriptor write completion
         onDescriptorWriteCallback = { success ->
             Log.d(TAG, "DATA_RESPONSE CCCD write completed: ${if (success) "SUCCESS" else "FAILED"}")
-            continuation.resume(success) {}
+            if (continuation.isActive) {
+                continuation.resume(success) {}
+            }
             onDescriptorWriteCallback = null // Clear callback
+        }
+
+        // Timeout for descriptor write
+        val timeoutCallback = Runnable {
+            if (continuation.isActive) {
+                Log.e(TAG, "Descriptor write timeout - callback never received")
+                onDescriptorWriteCallback = null
+                continuation.resume(false) {}
+            }
         }
 
         // Write to CCCD to enable indications
@@ -749,6 +779,12 @@ class BlePeriodicService : Service() {
             continuation.resume(false) {}
         } else {
             Log.d(TAG, "DATA_RESPONSE CCCD descriptor write initiated, waiting for callback...")
+            handler.postDelayed(timeoutCallback, 5000) // 5 second timeout
+        }
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutCallback)
+            onDescriptorWriteCallback = null
         }
     }
 
