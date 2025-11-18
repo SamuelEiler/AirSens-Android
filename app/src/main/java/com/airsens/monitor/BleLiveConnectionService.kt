@@ -246,8 +246,11 @@ class BleLiveConnectionService : Service() {
             .setDeviceName(DEVICE_NAME)
             .build()
 
-        // Create timeout runnable so we can cancel it when scan completes
-        val timeoutRunnable = Runnable {
+        // Declare callback and timeout runnable - need lateinit to avoid forward reference
+        lateinit var callback: ScanCallback
+        lateinit var timeoutRunnable: Runnable
+
+        timeoutRunnable = Runnable {
             bluetoothLeScanner?.stopScan(callback)
             if (continuation.isActive) {
                 Log.d(TAG, "Scan timeout")
@@ -255,7 +258,7 @@ class BleLiveConnectionService : Service() {
             }
         }
 
-        val callback = object : ScanCallback() {
+        callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 Log.d(TAG, "Device found: ${result.device.address}")
                 handler.removeCallbacks(timeoutRunnable) // Cancel timeout
