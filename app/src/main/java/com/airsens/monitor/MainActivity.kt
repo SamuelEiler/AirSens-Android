@@ -279,20 +279,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateGasResistanceChart() {
-        if (gasResistanceData.isEmpty()) {
-            gasResistanceModelProducer.runTransaction {
-                columnSeries()
+        lifecycleScope.launch {
+            if (gasResistanceData.isEmpty()) {
+                gasResistanceModelProducer.runTransaction {
+                    columnSeries()
+                }
+                return@launch
             }
-            return
-        }
 
-        // Vico 2.x expects x,y pairs where x is the timestamp (in seconds)
-        val sortedData = gasResistanceData.sortedBy { it.first }
-        val xValues = sortedData.map { it.first.toFloat() }
-        val yValues = sortedData.map { it.second }
+            // Vico 2.x expects x,y pairs where x is the timestamp (in seconds)
+            val sortedData = gasResistanceData.sortedBy { it.first }
+            val xValues = sortedData.map { it.first.toFloat() }
+            val yValues = sortedData.map { it.second }
 
-        gasResistanceModelProducer.runTransaction {
-            columnSeries(xValues, yValues)
+            gasResistanceModelProducer.runTransaction {
+                columnSeries(xValues, yValues)
+            }
         }
     }
 
@@ -302,30 +304,32 @@ class MainActivity : AppCompatActivity() {
         while (pm25Data.size > MAX_CHART_ENTRIES) pm25Data.removeAt(0)
         while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
-        if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
-            particleMatterModelProducer.runTransaction {
-                lineSeries()
+        lifecycleScope.launch {
+            if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
+                particleMatterModelProducer.runTransaction {
+                    lineSeries()
+                }
+                return@launch
             }
-            return
-        }
 
-        particleMatterModelProducer.runTransaction {
-            // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
-            // Each series needs its own x and y values
-            if (pm10Data.isNotEmpty() && pm25Data.isNotEmpty() && pm1Data.isNotEmpty()) {
-                val pm10Sorted = pm10Data.sortedBy { it.first }
-                val pm25Sorted = pm25Data.sortedBy { it.first }
-                val pm1Sorted = pm1Data.sortedBy { it.first }
+            particleMatterModelProducer.runTransaction {
+                // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
+                // Each series needs its own x and y values
+                if (pm10Data.isNotEmpty() && pm25Data.isNotEmpty() && pm1Data.isNotEmpty()) {
+                    val pm10Sorted = pm10Data.sortedBy { it.first }
+                    val pm25Sorted = pm25Data.sortedBy { it.first }
+                    val pm1Sorted = pm1Data.sortedBy { it.first }
 
-                lineSeries(
-                    pm10Sorted.map { it.first.toFloat() },  // x values for PM10
-                    pm10Sorted.map { it.second },           // y values for PM10
-                    pm25Sorted.map { it.second },           // y values for PM2.5 (shares x)
-                    pm1Sorted.map { it.second }             // y values for PM1.0 (shares x)
-                )
-            } else if (pm10Data.isNotEmpty()) {
-                val sorted = pm10Data.sortedBy { it.first }
-                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    lineSeries(
+                        pm10Sorted.map { it.first.toFloat() },  // x values for PM10
+                        pm10Sorted.map { it.second },           // y values for PM10
+                        pm25Sorted.map { it.second },           // y values for PM2.5 (shares x)
+                        pm1Sorted.map { it.second }             // y values for PM1.0 (shares x)
+                    )
+                } else if (pm10Data.isNotEmpty()) {
+                    val sorted = pm10Data.sortedBy { it.first }
+                    lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                }
             }
         }
     }
@@ -335,30 +339,32 @@ class MainActivity : AppCompatActivity() {
         while (temperatureData.size > MAX_CHART_ENTRIES) temperatureData.removeAt(0)
         while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
-        if (temperatureData.isEmpty() && humidityData.isEmpty()) {
-            tempHumidityModelProducer.runTransaction {
-                lineSeries()
+        lifecycleScope.launch {
+            if (temperatureData.isEmpty() && humidityData.isEmpty()) {
+                tempHumidityModelProducer.runTransaction {
+                    lineSeries()
+                }
+                return@launch
             }
-            return
-        }
 
-        tempHumidityModelProducer.runTransaction {
-            // Vico 2.x lineSeries for Temperature and Humidity
-            if (temperatureData.isNotEmpty() && humidityData.isNotEmpty()) {
-                val tempSorted = temperatureData.sortedBy { it.first }
-                val humSorted = humidityData.sortedBy { it.first }
+            tempHumidityModelProducer.runTransaction {
+                // Vico 2.x lineSeries for Temperature and Humidity
+                if (temperatureData.isNotEmpty() && humidityData.isNotEmpty()) {
+                    val tempSorted = temperatureData.sortedBy { it.first }
+                    val humSorted = humidityData.sortedBy { it.first }
 
-                lineSeries(
-                    tempSorted.map { it.first.toFloat() },  // x values
-                    tempSorted.map { it.second },           // y values for temperature
-                    humSorted.map { it.second }             // y values for humidity (shares x)
-                )
-            } else if (temperatureData.isNotEmpty()) {
-                val sorted = temperatureData.sortedBy { it.first }
-                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-            } else if (humidityData.isNotEmpty()) {
-                val sorted = humidityData.sortedBy { it.first }
-                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    lineSeries(
+                        tempSorted.map { it.first.toFloat() },  // x values
+                        tempSorted.map { it.second },           // y values for temperature
+                        humSorted.map { it.second }             // y values for humidity (shares x)
+                    )
+                } else if (temperatureData.isNotEmpty()) {
+                    val sorted = temperatureData.sortedBy { it.first }
+                    lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                } else if (humidityData.isNotEmpty()) {
+                    val sorted = humidityData.sortedBy { it.first }
+                    lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                }
             }
         }
     }
