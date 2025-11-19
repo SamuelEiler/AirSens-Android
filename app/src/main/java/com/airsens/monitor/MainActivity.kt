@@ -13,17 +13,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
-import com.patrykandpatrick.vico.core.cartesian.CartesianChart
-import com.patrykandpatrick.vico.core.cartesian.axis.HorizontalAxis
-import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
-import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
-import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
-import com.patrykandpatrick.vico.core.cartesian.layer.ColumnCartesianLayer
-import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
-import com.patrykandpatrick.vico.core.common.data.ExtraStore
-import com.patrykandpatrick.vico.views.cartesian.CartesianChartView
+import com.patrykandpatrick.vico.core.axis.AxisPosition
+import com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter
+import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
+import com.patrykandpatrick.vico.core.entry.FloatEntry
+import com.patrykandpatrick.vico.views.chart.ChartView
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -56,14 +50,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var iaqAccuracyText: TextView
 
     // Chart views (Vico)
-    private lateinit var gasResistanceChart: CartesianChartView
-    private lateinit var particleMatterChart: CartesianChartView
-    private lateinit var tempHumidityChart: CartesianChartView
+    private lateinit var gasResistanceChart: ChartView
+    private lateinit var particleMatterChart: ChartView
+    private lateinit var tempHumidityChart: ChartView
 
     // Vico chart model producers
-    private val gasResistanceModelProducer = CartesianChartModelProducer()
-    private val particleMatterModelProducer = CartesianChartModelProducer()
-    private val tempHumidityModelProducer = CartesianChartModelProducer()
+    private val gasResistanceModelProducer = ChartEntryModelProducer()
+    private val particleMatterModelProducer = ChartEntryModelProducer()
+    private val tempHumidityModelProducer = ChartEntryModelProducer()
 
     // Data storage for charts with timestamps
     private val gasResistanceData = mutableListOf<Pair<Long, Float>>() // timestamp -> gas resistance
@@ -275,11 +269,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun initializeCharts() {
         // Date/time formatter for X-axis (timestamps)
-        val dateTimeFormatter = object : CartesianValueFormatter {
+        val dateTimeFormatter = object : AxisValueFormatter<AxisPosition.Horizontal.Bottom> {
             private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
             private val dateFormat = SimpleDateFormat("MMM dd", Locale.getDefault())
 
-            override fun format(value: Float, chartValues: ExtraStore): CharSequence {
+            override fun formatValue(value: Float, chartValues: com.patrykandpatrick.vico.core.chart.values.ChartValues): CharSequence {
                 val timestamp = value.toLong()
                 val now = System.currentTimeMillis() / 1000
                 val daysDiff = (now - timestamp) / (24 * 3600)
@@ -293,25 +287,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Initialize Gas Resistance Bar Chart (Column chart in Vico)
-        gasResistanceChart.apply {
-            modelProducer = gasResistanceModelProducer
-            // Zoom and scroll enabled by default in Vico
-        }
-
-        // Initialize Particle Matter Line Chart with zoom/scroll
-        particleMatterChart.apply {
-            modelProducer = particleMatterModelProducer
-            // Zoom and scroll enabled by default in Vico
-        }
-
-        // Initialize Temperature & Humidity Line Chart with zoom/scroll
-        tempHumidityChart.apply {
-            modelProducer = tempHumidityModelProducer
-            // Zoom and scroll enabled by default in Vico
-        }
-
-        // Set initial empty data
+        // Vico 1.x: Charts are initialized in XML, just set initial empty data
         updateGasResistanceChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
@@ -319,20 +295,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateGasResistanceChart() {
         if (gasResistanceData.isEmpty()) {
-            gasResistanceModelProducer.runTransaction {
-                columnSeries()
-            }
+            gasResistanceModelProducer.setEntries(emptyList())
             return
         }
 
-        // Vico expects x,y pairs where x is the timestamp (in seconds)
+        // Vico 1.x expects FloatEntry(x, y) where x is the timestamp (in seconds)
         val sortedData = gasResistanceData.sortedBy { it.first }
-        val xValues = sortedData.map { it.first.toFloat() }
-        val yValues = sortedData.map { it.second }
-
-        gasResistanceModelProducer.runTransaction {
-            columnSeries(xValues, yValues)
+        val entries = sortedData.map { (timestamp, value) ->
+            FloatEntry(timestamp.toFloat(), value)
         }
+
+        gasResistanceModelProducer.setEntries(entries)
     }
 
     private fun updateParticleMatterChart() {
@@ -342,31 +315,35 @@ class MainActivity : AppCompatActivity() {
         while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
         if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
-            particleMatterModelProducer.runTransaction {
-                lineSeries()
-            }
+            particleMatterModelProducer.setEntries(emptyList())
             return
         }
 
-        particleMatterModelProducer.runTransaction {
-            // Vico lineSeries with multiple series for PM10, PM2.5, PM1.0
-            // Each series needs its own x and y values
-            if (pm10Data.isNotEmpty() && pm25Data.isNotEmpty() && pm1Data.isNotEmpty()) {
-                val pm10Sorted = pm10Data.sortedBy { it.first }
-                val pm25Sorted = pm25Data.sortedBy { it.first }
-                val pm1Sorted = pm1Data.sortedBy { it.first }
+        // Vico 1.x: Create separate entry lists for each series
+        val seriesList = mutableListOf<List<FloatEntry>>()
 
-                lineSeries(
-                    pm10Sorted.map { it.first.toFloat() },  // x values for PM10
-                    pm10Sorted.map { it.second },           // y values for PM10
-                    pm25Sorted.map { it.second },           // y values for PM2.5 (shares x)
-                    pm1Sorted.map { it.second }             // y values for PM1.0 (shares x)
-                )
-            } else if (pm10Data.isNotEmpty()) {
-                val sorted = pm10Data.sortedBy { it.first }
-                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+        if (pm10Data.isNotEmpty()) {
+            val pm10Entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) ->
+                FloatEntry(timestamp.toFloat(), value)
             }
+            seriesList.add(pm10Entries)
         }
+
+        if (pm25Data.isNotEmpty()) {
+            val pm25Entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) ->
+                FloatEntry(timestamp.toFloat(), value)
+            }
+            seriesList.add(pm25Entries)
+        }
+
+        if (pm1Data.isNotEmpty()) {
+            val pm1Entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) ->
+                FloatEntry(timestamp.toFloat(), value)
+            }
+            seriesList.add(pm1Entries)
+        }
+
+        particleMatterModelProducer.setEntries(seriesList)
     }
 
     private fun updateTempHumidityChart() {
@@ -375,31 +352,28 @@ class MainActivity : AppCompatActivity() {
         while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
         if (temperatureData.isEmpty() && humidityData.isEmpty()) {
-            tempHumidityModelProducer.runTransaction {
-                lineSeries()
-            }
+            tempHumidityModelProducer.setEntries(emptyList())
             return
         }
 
-        tempHumidityModelProducer.runTransaction {
-            // Vico lineSeries for Temperature and Humidity
-            if (temperatureData.isNotEmpty() && humidityData.isNotEmpty()) {
-                val tempSorted = temperatureData.sortedBy { it.first }
-                val humSorted = humidityData.sortedBy { it.first }
+        // Vico 1.x: Create separate entry lists for each series
+        val seriesList = mutableListOf<List<FloatEntry>>()
 
-                lineSeries(
-                    tempSorted.map { it.first.toFloat() },  // x values
-                    tempSorted.map { it.second },           // y values for temperature
-                    humSorted.map { it.second }             // y values for humidity (shares x)
-                )
-            } else if (temperatureData.isNotEmpty()) {
-                val sorted = temperatureData.sortedBy { it.first }
-                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-            } else if (humidityData.isNotEmpty()) {
-                val sorted = humidityData.sortedBy { it.first }
-                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+        if (temperatureData.isNotEmpty()) {
+            val tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) ->
+                FloatEntry(timestamp.toFloat(), value)
             }
+            seriesList.add(tempEntries)
         }
+
+        if (humidityData.isNotEmpty()) {
+            val humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) ->
+                FloatEntry(timestamp.toFloat(), value)
+            }
+            seriesList.add(humEntries)
+        }
+
+        tempHumidityModelProducer.setEntries(seriesList)
     }
 
     private fun clearChartData() {
