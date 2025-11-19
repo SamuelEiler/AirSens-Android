@@ -183,6 +183,7 @@ class MainActivity : AppCompatActivity() {
         pm1Data.clear()
         temperatureData.clear()
         humidityData.clear()
+        gasResistanceData.clear()
 
         if (measurements.isEmpty()) {
             return
@@ -203,11 +204,16 @@ class MainActivity : AppCompatActivity() {
             measurement.humidity?.let {
                 humidityData.add(Pair(timestamp, it))
             }
+
+            measurement.gasResistance?.let {
+                gasResistanceData.add(Pair(timestamp, it))
+            }
         }
 
         // Update charts on UI thread
         runOnUiThread {
             try {
+                updateGasResistanceChart()
                 updateParticleMatterChart()
                 updateTempHumidityChart()
 
