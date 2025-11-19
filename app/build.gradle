@@ -65,8 +65,9 @@ dependencies {
     // For BLE operations
     implementation 'androidx.bluetooth:bluetooth:1.0.0-alpha01'
 
-    // For charts
-    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+    // Vico charts - modern, performant charting library with zoom/scroll support
+    implementation 'com.patrykandpatrick.vico:core:2.0.0-alpha.28'
+    implementation 'com.patrykandpatrick.vico:views:2.0.0-alpha.28'
 
     // Room database
     implementation 'androidx.room:room-runtime:2.6.1'

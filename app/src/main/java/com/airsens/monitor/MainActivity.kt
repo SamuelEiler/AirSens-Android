@@ -13,12 +13,17 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
-import com.github.mikephil.charting.charts.BarChart
-import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.XAxis
-import com.github.mikephil.charting.data.*
-import com.github.mikephil.charting.formatter.ValueFormatter
-import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
+import com.patrykandpatrick.vico.core.cartesian.CartesianChart
+import com.patrykandpatrick.vico.core.cartesian.axis.HorizontalAxis
+import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
+import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
+import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
+import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
+import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
+import com.patrykandpatrick.vico.core.cartesian.layer.ColumnCartesianLayer
+import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
+import com.patrykandpatrick.vico.core.common.data.ExtraStore
+import com.patrykandpatrick.vico.views.cartesian.CartesianChartView
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -50,18 +55,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var obstructedText: TextView
     private lateinit var iaqAccuracyText: TextView
 
-    // Chart views
-    private lateinit var gasResistanceChart: BarChart
-    private lateinit var particleMatterChart: LineChart
-    private lateinit var tempHumidityChart: LineChart
+    // Chart views (Vico)
+    private lateinit var gasResistanceChart: CartesianChartView
+    private lateinit var particleMatterChart: CartesianChartView
+    private lateinit var tempHumidityChart: CartesianChartView
 
-    // Data storage for charts
-    private val gasResistanceMap = mutableMapOf<Int, Float>() // Temperature -> Gas Resistance
-    private val pm10History = mutableListOf<Entry>()
-    private val pm25History = mutableListOf<Entry>()
-    private val pm1History = mutableListOf<Entry>()
-    private val temperatureHistory = mutableListOf<Entry>()
-    private val humidityHistory = mutableListOf<Entry>()
+    // Vico chart model producers
+    private val gasResistanceModelProducer = CartesianChartModelProducer()
+    private val particleMatterModelProducer = CartesianChartModelProducer()
+    private val tempHumidityModelProducer = CartesianChartModelProducer()
+
+    // Data storage for charts with timestamps
+    private val gasResistanceData = mutableListOf<Pair<Long, Float>>() // timestamp -> gas resistance
+    private val pm10Data = mutableListOf<Pair<Long, Float>>() // timestamp -> value
+    private val pm25Data = mutableListOf<Pair<Long, Float>>()
+    private val pm1Data = mutableListOf<Pair<Long, Float>>()
+    private val temperatureData = mutableListOf<Pair<Long, Float>>() // timestamp -> value
+    private val humidityData = mutableListOf<Pair<Long, Float>>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -175,31 +185,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUIWithMeasurements(measurements: List<com.airsens.monitor.database.MeasurementEntity>) {
         // Clear existing data
-        pm10History.clear()
-        pm25History.clear()
-        pm1History.clear()
-        temperatureHistory.clear()
-        humidityHistory.clear()
+        pm10Data.clear()
+        pm25Data.clear()
+        pm1Data.clear()
+        temperatureData.clear()
+        humidityData.clear()
 
         if (measurements.isEmpty()) {
             return
         }
 
-        // Use index-based X values to avoid chart rendering issues with timestamps
-        // The actual timestamp will be shown in labels
-        measurements.forEachIndexed { index, measurement ->
-            val xValue = index.toFloat()
+        // Vico handles timestamps natively! Use actual measurement timestamps
+        measurements.forEach { measurement ->
+            val timestamp = measurement.timestamp
 
-            pm10History.add(Entry(xValue, measurement.pm10))
-            pm25History.add(Entry(xValue, measurement.pm25))
-            pm1History.add(Entry(xValue, measurement.pm1))
+            pm10Data.add(Pair(timestamp, measurement.pm10))
+            pm25Data.add(Pair(timestamp, measurement.pm25))
+            pm1Data.add(Pair(timestamp, measurement.pm1))
 
             measurement.temperature?.let {
-                temperatureHistory.add(Entry(xValue, it))
+                temperatureData.add(Pair(timestamp, it))
             }
 
             measurement.humidity?.let {
-                humidityHistory.add(Entry(xValue, it))
+                humidityData.add(Pair(timestamp, it))
             }
         }
 
@@ -265,100 +274,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeCharts() {
-        // Initialize Gas Resistance Bar Chart
+        // Date/time formatter for X-axis (timestamps)
+        val dateTimeFormatter = object : CartesianValueFormatter {
+            private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+            private val dateFormat = SimpleDateFormat("MMM dd", Locale.getDefault())
+
+            override fun format(value: Float, chartValues: ExtraStore): CharSequence {
+                val timestamp = value.toLong()
+                val now = System.currentTimeMillis() / 1000
+                val daysDiff = (now - timestamp) / (24 * 3600)
+
+                // Show time if within last 24 hours, otherwise show date
+                return if (daysDiff < 1) {
+                    timeFormat.format(Date(timestamp * 1000))
+                } else {
+                    dateFormat.format(Date(timestamp * 1000))
+                }
+            }
+        }
+
+        // Initialize Gas Resistance Bar Chart (Column chart in Vico)
         gasResistanceChart.apply {
-            description.isEnabled = false
-            setDrawBarShadow(false)
-            setDrawValueAboveBar(true)
-            setPinchZoom(false)
-            setScaleEnabled(false)
-            legend.isEnabled = false
-
-            xAxis.apply {
-                position = XAxis.XAxisPosition.BOTTOM
-                setDrawGridLines(false)
-                granularity = 1f
-                valueFormatter = object : ValueFormatter() {
-                    override fun getFormattedValue(value: Float): String {
-                        return "${value.toInt()}°C"
-                    }
-                }
-            }
-
-            axisLeft.apply {
-                setDrawGridLines(true)
-                axisMinimum = 0f
-            }
-
-            axisRight.isEnabled = false
+            modelProducer = gasResistanceModelProducer
+            // Zoom and scroll enabled by default in Vico
         }
 
-        // Initialize Particle Matter Line Chart
+        // Initialize Particle Matter Line Chart with zoom/scroll
         particleMatterChart.apply {
-            description.isEnabled = false
-            setTouchEnabled(true)
-            isDragEnabled = true
-            setScaleXEnabled(true)  // Enable X-axis zooming
-            setScaleYEnabled(false) // Disable Y-axis zooming (auto-scale)
-            setPinchZoom(false)     // Disable pinch zoom since we only want X-axis zoom
-            setDrawGridBackground(false)
-
-            xAxis.apply {
-                position = XAxis.XAxisPosition.BOTTOM
-                setDrawGridLines(true)
-                granularity = 1f
-                valueFormatter = object : ValueFormatter() {
-                    override fun getFormattedValue(value: Float): String {
-                        // Show measurement index (starting from 1 for display)
-                        return "#${value.toInt() + 1}"
-                    }
-                }
-            }
-
-            axisLeft.apply {
-                setDrawGridLines(true)
-                axisMinimum = 0f
-            }
-
-            axisRight.isEnabled = false
-
-            legend.isEnabled = true
-            setAutoScaleMinMaxEnabled(true) // Enable auto-scaling for Y-axis
+            modelProducer = particleMatterModelProducer
+            // Zoom and scroll enabled by default in Vico
         }
 
-        // Initialize Temperature & Humidity Line Chart
+        // Initialize Temperature & Humidity Line Chart with zoom/scroll
         tempHumidityChart.apply {
-            description.isEnabled = false
-            setTouchEnabled(true)
-            isDragEnabled = true
-            setScaleXEnabled(true)  // Enable X-axis zooming
-            setScaleYEnabled(false) // Disable Y-axis zooming (auto-scale)
-            setPinchZoom(false)     // Disable pinch zoom since we only want X-axis zoom
-            setDrawGridBackground(false)
-
-            xAxis.apply {
-                position = XAxis.XAxisPosition.BOTTOM
-                setDrawGridLines(true)
-                granularity = 1f
-                valueFormatter = object : ValueFormatter() {
-                    override fun getFormattedValue(value: Float): String {
-                        // Show measurement index (starting from 1 for display)
-                        return "#${value.toInt() + 1}"
-                    }
-                }
-            }
-
-            axisLeft.apply {
-                setDrawGridLines(true)
-            }
-
-            axisRight.apply {
-                setDrawGridLines(true)
-                axisMinimum = 0f
-            }
-
-            legend.isEnabled = true
-            setAutoScaleMinMaxEnabled(true) // Enable auto-scaling for Y-axis
+            modelProducer = tempHumidityModelProducer
+            // Zoom and scroll enabled by default in Vico
         }
 
         // Set initial empty data
@@ -368,134 +318,97 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateGasResistanceChart() {
-        val entries = gasResistanceMap.map { (temp, resistance) ->
-            BarEntry(temp.toFloat(), resistance)
-        }.sortedBy { it.x }
-
-        if (entries.isEmpty()) {
-            gasResistanceChart.clear()
-            gasResistanceChart.invalidate()
+        if (gasResistanceData.isEmpty()) {
+            gasResistanceModelProducer.runTransaction {
+                columnSeries()
+            }
             return
         }
 
-        val dataSet = BarDataSet(entries, "Gas Resistance").apply {
-            color = Color.parseColor("#9B59B6")
-            valueTextSize = 10f
-            valueFormatter = object : ValueFormatter() {
-                override fun getFormattedValue(value: Float): String {
-                    return "%.0f".format(value)
-                }
-            }
-        }
+        // Vico expects x,y pairs where x is the timestamp (in seconds)
+        val sortedData = gasResistanceData.sortedBy { it.first }
+        val xValues = sortedData.map { it.first.toFloat() }
+        val yValues = sortedData.map { it.second }
 
-        gasResistanceChart.data = BarData(dataSet)
-        gasResistanceChart.invalidate()
+        gasResistanceModelProducer.runTransaction {
+            columnSeries(xValues, yValues)
+        }
     }
 
     private fun updateParticleMatterChart() {
         // Limit data points
-        while (pm10History.size > MAX_CHART_ENTRIES) pm10History.removeAt(0)
-        while (pm25History.size > MAX_CHART_ENTRIES) pm25History.removeAt(0)
-        while (pm1History.size > MAX_CHART_ENTRIES) pm1History.removeAt(0)
+        while (pm10Data.size > MAX_CHART_ENTRIES) pm10Data.removeAt(0)
+        while (pm25Data.size > MAX_CHART_ENTRIES) pm25Data.removeAt(0)
+        while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
-        val dataSets = mutableListOf<LineDataSet>()
-
-        if (pm10History.isNotEmpty()) {
-            dataSets.add(LineDataSet(pm10History, "PM10").apply {
-                color = Color.RED
-                setCircleColor(Color.RED)
-                lineWidth = 2f
-                circleRadius = 3f
-                setDrawCircleHole(false)
-                valueTextSize = 0f
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-            })
-        }
-
-        if (pm25History.isNotEmpty()) {
-            dataSets.add(LineDataSet(pm25History, "PM2.5").apply {
-                color = Color.parseColor("#FF9800")
-                setCircleColor(Color.parseColor("#FF9800"))
-                lineWidth = 2f
-                circleRadius = 3f
-                setDrawCircleHole(false)
-                valueTextSize = 0f
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-            })
-        }
-
-        if (pm1History.isNotEmpty()) {
-            dataSets.add(LineDataSet(pm1History, "PM1.0").apply {
-                color = Color.parseColor("#4CAF50")
-                setCircleColor(Color.parseColor("#4CAF50"))
-                lineWidth = 2f
-                circleRadius = 3f
-                setDrawCircleHole(false)
-                valueTextSize = 0f
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-            })
-        }
-
-        if (dataSets.isEmpty()) {
-            particleMatterChart.clear()
-            particleMatterChart.invalidate()
+        if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
+            particleMatterModelProducer.runTransaction {
+                lineSeries()
+            }
             return
         }
 
-        particleMatterChart.data = LineData(dataSets as List<ILineDataSet>)
-        particleMatterChart.invalidate()
+        particleMatterModelProducer.runTransaction {
+            // Vico lineSeries with multiple series for PM10, PM2.5, PM1.0
+            // Each series needs its own x and y values
+            if (pm10Data.isNotEmpty() && pm25Data.isNotEmpty() && pm1Data.isNotEmpty()) {
+                val pm10Sorted = pm10Data.sortedBy { it.first }
+                val pm25Sorted = pm25Data.sortedBy { it.first }
+                val pm1Sorted = pm1Data.sortedBy { it.first }
+
+                lineSeries(
+                    pm10Sorted.map { it.first.toFloat() },  // x values for PM10
+                    pm10Sorted.map { it.second },           // y values for PM10
+                    pm25Sorted.map { it.second },           // y values for PM2.5 (shares x)
+                    pm1Sorted.map { it.second }             // y values for PM1.0 (shares x)
+                )
+            } else if (pm10Data.isNotEmpty()) {
+                val sorted = pm10Data.sortedBy { it.first }
+                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+            }
+        }
     }
 
     private fun updateTempHumidityChart() {
         // Limit data points
-        while (temperatureHistory.size > MAX_CHART_ENTRIES) temperatureHistory.removeAt(0)
-        while (humidityHistory.size > MAX_CHART_ENTRIES) humidityHistory.removeAt(0)
+        while (temperatureData.size > MAX_CHART_ENTRIES) temperatureData.removeAt(0)
+        while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
-        val dataSets = mutableListOf<LineDataSet>()
-
-        if (temperatureHistory.isNotEmpty()) {
-            dataSets.add(LineDataSet(temperatureHistory, "Temperature (°C)").apply {
-                color = Color.parseColor("#E74C3C")
-                setCircleColor(Color.parseColor("#E74C3C"))
-                lineWidth = 2f
-                circleRadius = 3f
-                setDrawCircleHole(false)
-                valueTextSize = 0f
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-                axisDependency = com.github.mikephil.charting.components.YAxis.AxisDependency.LEFT
-            })
-        }
-
-        if (humidityHistory.isNotEmpty()) {
-            dataSets.add(LineDataSet(humidityHistory, "Humidity (%)").apply {
-                color = Color.parseColor("#3498DB")
-                setCircleColor(Color.parseColor("#3498DB"))
-                lineWidth = 2f
-                circleRadius = 3f
-                setDrawCircleHole(false)
-                valueTextSize = 0f
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-                axisDependency = com.github.mikephil.charting.components.YAxis.AxisDependency.RIGHT
-            })
-        }
-
-        if (dataSets.isEmpty()) {
-            tempHumidityChart.clear()
-            tempHumidityChart.invalidate()
+        if (temperatureData.isEmpty() && humidityData.isEmpty()) {
+            tempHumidityModelProducer.runTransaction {
+                lineSeries()
+            }
             return
         }
 
-        tempHumidityChart.data = LineData(dataSets as List<ILineDataSet>)
-        tempHumidityChart.invalidate()
+        tempHumidityModelProducer.runTransaction {
+            // Vico lineSeries for Temperature and Humidity
+            if (temperatureData.isNotEmpty() && humidityData.isNotEmpty()) {
+                val tempSorted = temperatureData.sortedBy { it.first }
+                val humSorted = humidityData.sortedBy { it.first }
+
+                lineSeries(
+                    tempSorted.map { it.first.toFloat() },  // x values
+                    tempSorted.map { it.second },           // y values for temperature
+                    humSorted.map { it.second }             // y values for humidity (shares x)
+                )
+            } else if (temperatureData.isNotEmpty()) {
+                val sorted = temperatureData.sortedBy { it.first }
+                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+            } else if (humidityData.isNotEmpty()) {
+                val sorted = humidityData.sortedBy { it.first }
+                lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+            }
+        }
     }
 
     private fun clearChartData() {
-        gasResistanceMap.clear()
-        pm10History.clear()
-        pm25History.clear()
-        pm1History.clear()
-        temperatureHistory.clear()
-        humidityHistory.clear()
+        gasResistanceData.clear()
+        pm10Data.clear()
+        pm25Data.clear()
+        pm1Data.clear()
+        temperatureData.clear()
+        humidityData.clear()
 
         updateGasResistanceChart()
         updateParticleMatterChart()
