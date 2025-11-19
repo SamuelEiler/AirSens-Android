@@ -280,6 +280,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateGasResistanceChart() {
         lifecycleScope.launch {
+            // Only update if we have data (Vico doesn't allow empty series)
+            if (gasResistanceData.isEmpty()) return@launch
+
             // Vico 2.x expects x,y pairs where x is the timestamp (in seconds)
             val sortedData = gasResistanceData.sortedBy { it.first }
             val xValues = sortedData.map { it.first.toFloat() }
@@ -300,6 +303,9 @@ class MainActivity : AppCompatActivity() {
         while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
         lifecycleScope.launch {
+            // Only update if we have at least one data series (Vico doesn't allow empty series)
+            if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) return@launch
+
             particleMatterModelProducer.runTransaction {
                 // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
                 lineSeries {
@@ -326,6 +332,9 @@ class MainActivity : AppCompatActivity() {
         while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
         lifecycleScope.launch {
+            // Only update if we have at least one data series (Vico doesn't allow empty series)
+            if (temperatureData.isEmpty() && humidityData.isEmpty()) return@launch
+
             tempHumidityModelProducer.runTransaction {
                 // Vico 2.x lineSeries for Temperature and Humidity
                 lineSeries {
