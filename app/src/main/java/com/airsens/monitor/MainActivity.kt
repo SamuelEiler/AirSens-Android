@@ -286,7 +286,9 @@ class MainActivity : AppCompatActivity() {
             val yValues = sortedData.map { it.second }
 
             gasResistanceModelProducer.runTransaction {
-                columnSeries(xValues, yValues)
+                columnSeries {
+                    series(xValues, yValues)
+                }
             }
         }
     }
@@ -300,24 +302,19 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             particleMatterModelProducer.runTransaction {
                 // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
-                // Each series needs its own x and y values
-                if (pm10Data.isNotEmpty() && pm25Data.isNotEmpty() && pm1Data.isNotEmpty()) {
-                    val pm10Sorted = pm10Data.sortedBy { it.first }
-                    val pm25Sorted = pm25Data.sortedBy { it.first }
-                    val pm1Sorted = pm1Data.sortedBy { it.first }
-
-                    lineSeries(
-                        pm10Sorted.map { it.first.toFloat() },  // x values for PM10
-                        pm10Sorted.map { it.second },           // y values for PM10
-                        pm25Sorted.map { it.second },           // y values for PM2.5 (shares x)
-                        pm1Sorted.map { it.second }             // y values for PM1.0 (shares x)
-                    )
-                } else if (pm10Data.isNotEmpty()) {
-                    val sorted = pm10Data.sortedBy { it.first }
-                    lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                } else {
-                    // Empty data - pass empty lists
-                    lineSeries(emptyList(), emptyList())
+                lineSeries {
+                    if (pm10Data.isNotEmpty()) {
+                        val sorted = pm10Data.sortedBy { it.first }
+                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    }
+                    if (pm25Data.isNotEmpty()) {
+                        val sorted = pm25Data.sortedBy { it.first }
+                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    }
+                    if (pm1Data.isNotEmpty()) {
+                        val sorted = pm1Data.sortedBy { it.first }
+                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    }
                 }
             }
         }
@@ -331,24 +328,15 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             tempHumidityModelProducer.runTransaction {
                 // Vico 2.x lineSeries for Temperature and Humidity
-                if (temperatureData.isNotEmpty() && humidityData.isNotEmpty()) {
-                    val tempSorted = temperatureData.sortedBy { it.first }
-                    val humSorted = humidityData.sortedBy { it.first }
-
-                    lineSeries(
-                        tempSorted.map { it.first.toFloat() },  // x values
-                        tempSorted.map { it.second },           // y values for temperature
-                        humSorted.map { it.second }             // y values for humidity (shares x)
-                    )
-                } else if (temperatureData.isNotEmpty()) {
-                    val sorted = temperatureData.sortedBy { it.first }
-                    lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                } else if (humidityData.isNotEmpty()) {
-                    val sorted = humidityData.sortedBy { it.first }
-                    lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                } else {
-                    // Empty data - pass empty lists
-                    lineSeries(emptyList(), emptyList())
+                lineSeries {
+                    if (temperatureData.isNotEmpty()) {
+                        val sorted = temperatureData.sortedBy { it.first }
+                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    }
+                    if (humidityData.isNotEmpty()) {
+                        val sorted = humidityData.sortedBy { it.first }
+                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                    }
                 }
             }
         }
