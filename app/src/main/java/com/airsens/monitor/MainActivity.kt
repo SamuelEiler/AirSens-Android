@@ -13,9 +13,6 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
-import com.patrykandpatrick.vico.core.cartesian.CartesianChart
-import com.patrykandpatrick.vico.core.cartesian.layer.ColumnCartesianLayer
-import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
@@ -276,18 +273,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeCharts() {
-        // Vico 2.x: Create charts with appropriate layers
-
-        // Gas Resistance: Column chart
-        gasResistanceChart.chart = CartesianChart(ColumnCartesianLayer())
+        // Vico 2.x: Assign model producers - charts are auto-configured from data type
         gasResistanceChart.modelProducer = gasResistanceModelProducer
-
-        // Particle Matter: Line chart (multiple series)
-        particleMatterChart.chart = CartesianChart(LineCartesianLayer())
         particleMatterChart.modelProducer = particleMatterModelProducer
-
-        // Temperature & Humidity: Line chart (multiple series)
-        tempHumidityChart.chart = CartesianChart(LineCartesianLayer())
         tempHumidityChart.modelProducer = tempHumidityModelProducer
 
         // Set initial empty data
