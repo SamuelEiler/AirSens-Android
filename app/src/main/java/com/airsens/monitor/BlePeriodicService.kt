@@ -459,12 +459,30 @@ class BlePeriodicService : Service() {
             // Connection was cancelled (device disconnected before service discovery)
             Log.w(TAG, "Connection cancelled: ${e.message}")
             updateNotification("Connection failed")
-            currentGatt?.close()
+            currentGatt?.let { gatt ->
+                if (ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    gatt.disconnect()
+                }
+                gatt.close()
+            }
             currentGatt = null
         } catch (e: Exception) {
             Log.e(TAG, "Error in periodic connection", e)
             updateNotification("Error: ${e.message}")
-            currentGatt?.close()
+            currentGatt?.let { gatt ->
+                if (ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    gatt.disconnect()
+                }
+                gatt.close()
+            }
             currentGatt = null
         }
     }
@@ -506,10 +524,23 @@ class BlePeriodicService : Service() {
 
         Log.d(TAG, "Using scan filter for device name: $DEVICE_NAME")
 
-        val callback = object : ScanCallback() {
+        // Declare callback and timeout runnable - need lateinit to avoid forward reference
+        lateinit var callback: ScanCallback
+        lateinit var timeoutRunnable: Runnable
+
+        timeoutRunnable = Runnable {
+            bluetoothLeScanner?.stopScan(callback)
+            if (continuation.isActive) {
+                Log.d(TAG, "BLE scan timeout reached")
+                continuation.resume(null) {}
+            }
+        }
+
+        callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 Log.d(TAG, "Device found in scan: ${result.device.address}")
                 // Filter already matched, so we can directly use this device
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
                 bluetoothLeScanner?.stopScan(this)
                 if (continuation.isActive) {
                     continuation.resume(result.device) {}
@@ -518,6 +549,7 @@ class BlePeriodicService : Service() {
 
             override fun onScanFailed(errorCode: Int) {
                 Log.e(TAG, "BLE scan failed with error code: $errorCode")
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
                 bluetoothLeScanner?.stopScan(this)
                 if (continuation.isActive) {
                     continuation.resume(null) {}
@@ -529,15 +561,10 @@ class BlePeriodicService : Service() {
         bluetoothLeScanner?.startScan(scanFilters, settings, callback)
 
         // Timeout after scanTimeout (varies based on screen state)
-        handler.postDelayed({
-            bluetoothLeScanner?.stopScan(callback)
-            if (continuation.isActive) {
-                Log.d(TAG, "BLE scan timeout reached")
-                continuation.resume(null) {}
-            }
-        }, scanTimeout)
+        handler.postDelayed(timeoutRunnable, scanTimeout)
 
         continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
             bluetoothLeScanner?.stopScan(callback)
         }
     }
@@ -585,7 +612,13 @@ class BlePeriodicService : Service() {
                     Log.d(TAG, "Service discovery successful")
 
                     // Enable indications for time request characteristic (ESP32 will request time sync)
-                    enableTimeRequestIndications(gatt)
+                    // Launch coroutine to call suspend function
+                    serviceScope.launch {
+                        val success = enableTimeRequestIndications(gatt)
+                        if (!success) {
+                            Log.w(TAG, "Failed to enable TIME_REQUEST indications, but continuing anyway")
+                        }
+                    }
 
                     continuation.resume(gatt) {}
                 } else if (continuation.isActive) {
@@ -685,6 +718,13 @@ class BlePeriodicService : Service() {
 
         Log.d(TAG, "Calling device.connectGatt()")
         val gatt = device.connectGatt(this, false, callback)
+        if (gatt == null) {
+            Log.e(TAG, "connectGatt() returned null - BLE stack unavailable")
+            if (continuation.isActive) {
+                continuation.cancel()
+            }
+            return@suspendCancellableCoroutine
+        }
         currentGatt = gatt
 
         continuation.invokeOnCancellation {
@@ -719,7 +759,16 @@ class BlePeriodicService : Service() {
             return@suspendCancellableCoroutine
         }
 
+        // Create timeout runnable so we can cancel it when read completes
+        val timeoutRunnable = Runnable {
+            if (continuation.isActive) {
+                onCharacteristicReadCallback = null
+                continuation.resume(0) {}
+            }
+        }
+
         onCharacteristicReadCallback = { value, status ->
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
             if (status == BluetoothGatt.GATT_SUCCESS && continuation.isActive && value != null) {
                 val count = value.getOrNull(0)?.toInt() ?: 0
                 continuation.resume(count and 0xFF) {}
@@ -731,13 +780,12 @@ class BlePeriodicService : Service() {
 
         gatt.readCharacteristic(characteristic)
 
-        // Timeout
-        handler.postDelayed({
-            if (continuation.isActive) {
-                onCharacteristicReadCallback = null
-                continuation.resume(0) {}
-            }
-        }, 3000)
+        // Timeout after 3 seconds
+        handler.postDelayed(timeoutRunnable, 3000)
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+        }
     }
 
     private suspend fun readMeasurement(gatt: BluetoothGatt): AirQualitySensorClient.MeasurementData? = suspendCancellableCoroutine { continuation ->
@@ -758,7 +806,16 @@ class BlePeriodicService : Service() {
             return@suspendCancellableCoroutine
         }
 
+        // Create timeout runnable so we can cancel it when read completes
+        val timeoutRunnable = Runnable {
+            if (continuation.isActive) {
+                onCharacteristicReadCallback = null
+                continuation.resume(null) {}
+            }
+        }
+
         onCharacteristicReadCallback = { value, status ->
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
             if (status == BluetoothGatt.GATT_SUCCESS && continuation.isActive && value != null) {
                 Log.d(TAG, "Measurement data received: ${value.size} bytes")
                 Log.d(TAG, "First 20 bytes (hex): ${value.take(20).joinToString(" ") { "%02X".format(it) }}")
@@ -773,13 +830,12 @@ class BlePeriodicService : Service() {
 
         gatt.readCharacteristic(characteristic)
 
-        // Timeout
-        handler.postDelayed({
-            if (continuation.isActive) {
-                onCharacteristicReadCallback = null
-                continuation.resume(null) {}
-            }
-        }, 3000)
+        // Timeout after 3 seconds
+        handler.postDelayed(timeoutRunnable, 3000)
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+        }
     }
 
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
@@ -909,8 +965,18 @@ class BlePeriodicService : Service() {
             return@suspendCancellableCoroutine
         }
 
+        // Create timeout runnable so we can cancel it when write completes
+        val timeoutRunnable = Runnable {
+            if (continuation.isActive) {
+                Log.e(TAG, "DATA_RESPONSE CCCD descriptor write timeout (5s)")
+                onDescriptorWriteCallback = null
+                continuation.resume(false) {}
+            }
+        }
+
         // Set up callback for descriptor write completion
         onDescriptorWriteCallback = { success ->
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
             if (success) {
                 Log.i(TAG, "✓ DATA_RESPONSE CCCD write SUCCESS - Notifications enabled on ESP32")
                 Log.i(TAG, "  ESP32 can now send notifications (no ACK required)")
@@ -928,10 +994,17 @@ class BlePeriodicService : Service() {
 
         if (!writeSuccess) {
             Log.e(TAG, "Failed to initiate DATA_RESPONSE CCCD descriptor write")
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
             onDescriptorWriteCallback = null
             continuation.resume(false) {}
         } else {
             Log.d(TAG, "DATA_RESPONSE CCCD descriptor write initiated, waiting for callback...")
+            // Timeout after 5 seconds
+            handler.postDelayed(timeoutRunnable, 5000)
+        }
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
         }
     }
 
@@ -1192,14 +1265,15 @@ class BlePeriodicService : Service() {
 
     // ===== End Bulk Data Sync Functions =====
 
-    private fun enableTimeRequestIndications(gatt: BluetoothGatt) {
+    private suspend fun enableTimeRequestIndications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "No BLUETOOTH_CONNECT permission, cannot enable indications")
-            return
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
         }
 
         val service = gatt.getService(SERVICE_UUID)
@@ -1207,24 +1281,63 @@ class BlePeriodicService : Service() {
 
         if (timeRequestChar == null) {
             Log.w(TAG, "Time request characteristic (0xAAA4) not found, cannot enable indications")
-            return
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
         }
 
         // Enable local notifications/indications
         val success = gatt.setCharacteristicNotification(timeRequestChar, true)
         if (!success) {
             Log.e(TAG, "Failed to set characteristic notification for time request")
-            return
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
         }
 
         // Enable indications on the remote device by writing to CCCD
         val descriptor = timeRequestChar.getDescriptor(CCCD_UUID)
-        if (descriptor != null) {
-            descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-            val writeSuccess = gatt.writeDescriptor(descriptor)
-            Log.i(TAG, "Enabling TIME_REQUEST indications (0xAAA4): ${if (writeSuccess) "success" else "failed"}")
-        } else {
+        if (descriptor == null) {
             Log.w(TAG, "CCCD descriptor not found for TIME_REQUEST characteristic")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
+
+        // Create timeout runnable so we can cancel it when write completes
+        val timeoutRunnable = Runnable {
+            if (continuation.isActive) {
+                Log.e(TAG, "TIME_REQUEST CCCD descriptor write timeout (5s)")
+                onDescriptorWriteCallback = null
+                continuation.resume(false) {}
+            }
+        }
+
+        // Set up callback for descriptor write completion
+        onDescriptorWriteCallback = { writeSuccess ->
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            if (writeSuccess) {
+                Log.i(TAG, "✓ TIME_REQUEST CCCD write SUCCESS - Indications enabled on ESP32")
+            } else {
+                Log.e(TAG, "✗ TIME_REQUEST CCCD write FAILED - Indications NOT enabled")
+            }
+            continuation.resume(writeSuccess) {}
+            onDescriptorWriteCallback = null // Clear callback
+        }
+
+        descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        val writeSuccess = gatt.writeDescriptor(descriptor)
+
+        if (!writeSuccess) {
+            Log.e(TAG, "Failed to initiate TIME_REQUEST CCCD descriptor write")
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            onDescriptorWriteCallback = null
+            continuation.resume(false) {}
+        } else {
+            Log.i(TAG, "TIME_REQUEST CCCD descriptor write initiated, waiting for callback...")
+            // Timeout after 5 seconds
+            handler.postDelayed(timeoutRunnable, 5000)
+        }
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
         }
     }
 

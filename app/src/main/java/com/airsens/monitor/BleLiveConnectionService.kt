@@ -8,8 +8,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -69,6 +71,13 @@ class BleLiveConnectionService : Service() {
     private var isRunning = false
     private var shouldReconnect = false
 
+    // AutoConnect state for persistent reconnection (industry standard for wearables)
+    private var connectedDevice: BluetoothDevice? = null
+    private var useAutoConnect = false  // Switch to true after first successful connection
+
+    // Callbacks for GATT operations
+    private var onDescriptorWriteCallback: ((Boolean) -> Unit)? = null
+
     // Bulk data sync state
     private val bulkDataParser = BulkDataParser()
     private var expectedTotalPackets = 0
@@ -79,6 +88,29 @@ class BleLiveConnectionService : Service() {
     private val connectionHealthCheckInterval = 60000L // Check every 60 seconds
     private val connectionTimeoutMs = 120000L // 2 minutes without data = dead connection
     private var healthCheckJob: Job? = null
+
+    // Bluetooth state receiver for handling BT on/off
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                when (state) {
+                    BluetoothAdapter.STATE_ON -> {
+                        Log.i(TAG, "Bluetooth turned ON - restarting connection")
+                        if (shouldReconnect && connectedDevice != null) {
+                            serviceScope.launch {
+                                delay(500) // Give BT stack time to stabilize
+                                reconnectToKnownDevice()
+                            }
+                        }
+                    }
+                    BluetoothAdapter.STATE_OFF -> {
+                        Log.w(TAG, "Bluetooth turned OFF")
+                    }
+                }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -91,6 +123,11 @@ class BleLiveConnectionService : Service() {
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
         bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
+
+        // Register Bluetooth state receiver for auto-reconnect on BT toggle
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        registerReceiver(bluetoothStateReceiver, filter)
+        Log.d(TAG, "Registered Bluetooth state receiver")
 
         createNotificationChannel()
     }
@@ -128,11 +165,22 @@ class BleLiveConnectionService : Service() {
         super.onDestroy()
         isRunning = false
         shouldReconnect = false
+        useAutoConnect = false
         stopConnectionHealthCheck()
         handler.removeCallbacksAndMessages(null)
+
+        // Unregister Bluetooth state receiver
+        try {
+            unregisterReceiver(bluetoothStateReceiver)
+            Log.d(TAG, "Unregistered Bluetooth state receiver")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unregister receiver: ${e.message}")
+        }
+
         currentGatt?.disconnect()
         currentGatt?.close()
         currentGatt = null
+        connectedDevice = null
         serviceScope.cancel()
         Log.i(TAG, "========================================")
         Log.i(TAG, "⏹ LIVE CONNECTION SERVICE STOPPED")
@@ -180,39 +228,55 @@ class BleLiveConnectionService : Service() {
     private suspend fun connectAndMaintain() {
         while (shouldReconnect && isRunning) {
             try {
-                updateNotification("Scanning for device...")
-                Log.d(TAG, "Scanning for device...")
+                // Industry-standard two-phase connection strategy:
+                // 1. First connection: Fast direct connect after aggressive scan
+                // 2. Subsequent connections: autoConnect=true (Android handles reconnection forever)
 
-                // 1. Scan for device
-                val device = scanForDevice()
-                if (device == null) {
-                    Log.w(TAG, "Device not found, retrying in ${RECONNECT_DELAY}ms")
-                    delay(RECONNECT_DELAY)
-                    continue
+                if (connectedDevice != null && useAutoConnect) {
+                    // We've connected before - use autoConnect for automatic reconnection
+                    Log.i(TAG, "Using autoConnect mode for known device: ${connectedDevice!!.address}")
+                    reconnectToKnownDevice()
+                    // autoConnect never times out - wait here until shouldReconnect becomes false
+                    waitForDisconnection()
+                } else {
+                    // First connection - use fast direct connect
+                    updateNotification("Scanning for device...")
+                    Log.d(TAG, "First connection - scanning for device...")
+
+                    // 1. Scan aggressively for device
+                    val device = scanForDevice()
+                    if (device == null) {
+                        Log.w(TAG, "Device not found, retrying in ${RECONNECT_DELAY}ms")
+                        delay(RECONNECT_DELAY)
+                        continue
+                    }
+
+                    updateNotification("Connecting...")
+                    Log.i(TAG, "Found device: ${device.address}")
+
+                    // 2. Direct connect (autoConnect=false) for fast initial connection
+                    val gatt = connectToDevice(device, autoConnect = false)
+                    if (gatt == null) {
+                        Log.w(TAG, "Connection failed, retrying in ${RECONNECT_DELAY}ms")
+                        delay(RECONNECT_DELAY)
+                        continue
+                    }
+
+                    // First connection successful!
+                    connectedDevice = device
+                    useAutoConnect = true  // Switch to autoConnect mode for future reconnections
+
+                    updateNotification("Connected - Live monitoring")
+                    Log.i(TAG, "========================================")
+                    Log.i(TAG, "✅ FIRST CONNECTION ESTABLISHED")
+                    Log.i(TAG, "   Device: ${device.address}")
+                    Log.i(TAG, "   Switched to autoConnect mode")
+                    Log.i(TAG, "   Will auto-reconnect on disconnect")
+                    Log.i(TAG, "========================================")
+
+                    // Wait for disconnection
+                    waitForDisconnection()
                 }
-
-                updateNotification("Connecting...")
-                Log.i(TAG, "Found device: ${device.address}")
-
-                // 2. Connect and subscribe to live measurements
-                val gatt = connectToDevice(device)
-                if (gatt == null) {
-                    Log.w(TAG, "Connection failed, retrying in ${RECONNECT_DELAY}ms")
-                    delay(RECONNECT_DELAY)
-                    continue
-                }
-
-                // Connection successful - stay connected until disconnected
-                updateNotification("Connected - Live monitoring")
-                Log.i(TAG, "========================================")
-                Log.i(TAG, "✅ LIVE CONNECTION ESTABLISHED")
-                Log.i(TAG, "   Receiving real-time measurements")
-                Log.i(TAG, "========================================")
-
-                // Wait for disconnection (connection is maintained in GATT callback)
-                // This coroutine will continue running until shouldReconnect becomes false
-                // or the connection is lost
-                waitForDisconnection()
 
             } catch (e: CancellationException) {
                 Log.i(TAG, "Connection cancelled")
@@ -225,6 +289,29 @@ class BleLiveConnectionService : Service() {
         }
 
         Log.i(TAG, "Live connection loop ended")
+    }
+
+    /**
+     * Reconnect to known device using autoConnect=true (industry standard for wearables)
+     * This enables automatic reconnection that survives disconnects and never times out
+     */
+    private suspend fun reconnectToKnownDevice() {
+        val device = connectedDevice ?: return
+
+        Log.i(TAG, "Reconnecting with autoConnect=true (no timeout, auto-reconnect forever)")
+        updateNotification("Auto-reconnecting...")
+
+        // Use autoConnect=true - Android will automatically connect whenever device is in range
+        // No scan needed, no timeout, survives disconnections
+        val gatt = connectToDevice(device, autoConnect = true)
+
+        if (gatt != null) {
+            Log.i(TAG, "AutoConnect initiated - will reconnect automatically")
+        } else {
+            Log.w(TAG, "Failed to initiate autoConnect")
+            useAutoConnect = false  // Fall back to scan+connect
+            connectedDevice = null
+        }
     }
 
     private suspend fun scanForDevice(): BluetoothDevice? = suspendCancellableCoroutine { continuation ->
@@ -246,9 +333,22 @@ class BleLiveConnectionService : Service() {
             .setDeviceName(DEVICE_NAME)
             .build()
 
-        val callback = object : ScanCallback() {
+        // Declare callback and timeout runnable - need lateinit to avoid forward reference
+        lateinit var callback: ScanCallback
+        lateinit var timeoutRunnable: Runnable
+
+        timeoutRunnable = Runnable {
+            bluetoothLeScanner?.stopScan(callback)
+            if (continuation.isActive) {
+                Log.d(TAG, "Scan timeout")
+                continuation.resume(null) {}
+            }
+        }
+
+        callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 Log.d(TAG, "Device found: ${result.device.address}")
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
                 bluetoothLeScanner?.stopScan(this)
                 if (continuation.isActive) {
                     continuation.resume(result.device) {}
@@ -257,6 +357,7 @@ class BleLiveConnectionService : Service() {
 
             override fun onScanFailed(errorCode: Int) {
                 Log.e(TAG, "Scan failed: $errorCode")
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
                 bluetoothLeScanner?.stopScan(this)
                 if (continuation.isActive) {
                     continuation.resume(null) {}
@@ -267,22 +368,17 @@ class BleLiveConnectionService : Service() {
         bluetoothLeScanner?.startScan(listOf(scanFilter), settings, callback)
 
         // Timeout
-        handler.postDelayed({
-            bluetoothLeScanner?.stopScan(callback)
-            if (continuation.isActive) {
-                Log.d(TAG, "Scan timeout")
-                continuation.resume(null) {}
-            }
-        }, SCAN_TIMEOUT)
+        handler.postDelayed(timeoutRunnable, SCAN_TIMEOUT)
 
         continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
             bluetoothLeScanner?.stopScan(callback)
         }
     }
 
     private var disconnectionLatch: CompletableDeferred<Unit>? = null
 
-    private suspend fun connectToDevice(device: BluetoothDevice): BluetoothGatt? = suspendCancellableCoroutine { continuation ->
+    private suspend fun connectToDevice(device: BluetoothDevice, autoConnect: Boolean = false): BluetoothGatt? = suspendCancellableCoroutine { continuation ->
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -308,8 +404,20 @@ class BleLiveConnectionService : Service() {
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        Log.w(TAG, "BLE disconnected")
-                        disconnectionLatch?.complete(Unit)
+                        Log.w(TAG, "BLE disconnected (status=$status)")
+
+                        // If we disconnect before service discovery completes, cancel the connection attempt
+                        if (continuation.isActive) {
+                            Log.w(TAG, "Disconnected during connection/discovery - cancelling connection attempt")
+                            continuation.cancel()
+                        }
+
+                        // Complete the latch to signal disconnection
+                        // Use a small delay to ensure all callbacks finish
+                        serviceScope.launch {
+                            delay(100)
+                            disconnectionLatch?.complete(Unit)
+                        }
                         if (shouldReconnect) {
                             Log.i(TAG, "Connection lost, will attempt reconnect")
                             updateNotification("Disconnected, reconnecting...")
@@ -323,7 +431,12 @@ class BleLiveConnectionService : Service() {
                     Log.i(TAG, "Services discovered, setting up persistent connection...")
 
                     // Enable time request indications
-                    enableTimeRequestIndications(gatt)
+                    serviceScope.launch {
+                        val success = enableTimeRequestIndications(gatt)
+                        if (!success) {
+                            Log.w(TAG, "Failed to enable TIME_REQUEST indications, but continuing anyway")
+                        }
+                    }
 
                     // Send initial time sync
                     serviceScope.launch {
@@ -371,6 +484,7 @@ class BleLiveConnectionService : Service() {
                     }
                 } else {
                     Log.e(TAG, "Service discovery failed: $status")
+                    gatt.disconnect() // Trigger disconnect to clean up properly
                     if (continuation.isActive) {
                         continuation.resume(null) {}
                     }
@@ -429,14 +543,41 @@ class BleLiveConnectionService : Service() {
                     }
                 }
             }
+
+            // Handle descriptor write (for enabling notifications/indications)
+            override fun onDescriptorWrite(
+                gatt: BluetoothGatt,
+                descriptor: BluetoothGattDescriptor,
+                status: Int
+            ) {
+                Log.d(TAG, "onDescriptorWrite: descriptor=${descriptor.uuid}, status=$status")
+                val success = status == BluetoothGatt.GATT_SUCCESS
+                onDescriptorWriteCallback?.invoke(success)
+            }
         }
 
-        Log.d(TAG, "Connecting to device...")
-        val gatt = device.connectGatt(this, false, callback)
+        Log.i(TAG, "Connecting to device with autoConnect=$autoConnect")
+        if (autoConnect) {
+            Log.i(TAG, "  autoConnect=true: No timeout, will reconnect forever")
+        } else {
+            Log.i(TAG, "  autoConnect=false: 30s timeout, direct connect")
+        }
+
+        val gatt = device.connectGatt(this, autoConnect, callback)
+        if (gatt == null) {
+            Log.e(TAG, "connectGatt() returned null - BLE stack unavailable")
+            disconnectionLatch = null // Clean up latch since connection failed
+            if (continuation.isActive) {
+                continuation.cancel()
+            }
+            return@suspendCancellableCoroutine
+        }
         currentGatt = gatt
 
         continuation.invokeOnCancellation {
             Log.d(TAG, "Connection cancelled")
+            disconnectionLatch?.complete(Unit)
+            disconnectionLatch = null
             gatt.close()
             currentGatt = null
         }
@@ -456,8 +597,40 @@ class BleLiveConnectionService : Service() {
             stopConnectionHealthCheck()
 
             disconnectionLatch = null
-            currentGatt?.close()
-            currentGatt = null
+
+            // CRITICAL: When using autoConnect, DON'T close GATT!
+            // Closing GATT releases the object and breaks auto-reconnection.
+            // Only disconnect to trigger the auto-reconnect process.
+            if (useAutoConnect) {
+                Log.i(TAG, "AutoConnect mode: Disconnecting but NOT closing GATT (enables auto-reconnect)")
+                currentGatt?.let { gatt ->
+                    if (ActivityCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        gatt.disconnect()
+                        delay(100) // Brief delay to ensure disconnect is processed
+                    }
+                }
+                // DON'T set currentGatt = null in autoConnect mode!
+                // Android will use this GATT object to auto-reconnect
+            } else {
+                // Direct connect mode: Clean up GATT completely
+                Log.d(TAG, "Direct connect mode: Disconnecting and closing GATT")
+                currentGatt?.let { gatt ->
+                    if (ActivityCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        gatt.disconnect()
+                        delay(200) // Give time for disconnect to complete
+                    }
+                    gatt.close()
+                }
+                currentGatt = null
+            }
             Log.d(TAG, "Cleaned up GATT connection")
         }
     }
@@ -547,25 +720,33 @@ class BleLiveConnectionService : Service() {
 
         if (writeSuccess) {
             Log.i(TAG, "MEASUREMENT CCCD write initiated")
-            // Assume success - we'll know if notifications don't arrive
-            handler.postDelayed({
+            // Create timeout runnable so we can cancel it on cancellation
+            val timeoutRunnable = Runnable {
                 if (continuation.isActive) {
                     continuation.resume(true) {}
                 }
-            }, 500)
+            }
+            // Assume success - we'll know if notifications don't arrive
+            handler.postDelayed(timeoutRunnable, 500)
+
+            continuation.invokeOnCancellation {
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            }
         } else {
             Log.e(TAG, "Failed to write MEASUREMENT CCCD")
             continuation.resume(false) {}
         }
     }
 
-    private fun enableTimeRequestIndications(gatt: BluetoothGatt) {
+    private suspend fun enableTimeRequestIndications(gatt: BluetoothGatt): Boolean = suspendCancellableCoroutine { continuation ->
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            return
+            Log.w(TAG, "No BLUETOOTH_CONNECT permission, cannot enable indications")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
         }
 
         val service = gatt.getService(SERVICE_UUID)
@@ -573,16 +754,61 @@ class BleLiveConnectionService : Service() {
 
         if (timeRequestChar == null) {
             Log.w(TAG, "TIME_REQUEST characteristic not found")
-            return
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
         }
 
-        gatt.setCharacteristicNotification(timeRequestChar, true)
+        val success = gatt.setCharacteristicNotification(timeRequestChar, true)
+        if (!success) {
+            Log.e(TAG, "Failed to set characteristic notification for TIME_REQUEST")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
 
         val descriptor = timeRequestChar.getDescriptor(CCCD_UUID)
-        descriptor?.let {
-            it.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-            gatt.writeDescriptor(it)
-            Log.i(TAG, "TIME_REQUEST indications enabled")
+        if (descriptor == null) {
+            Log.w(TAG, "CCCD descriptor not found for TIME_REQUEST characteristic")
+            continuation.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
+
+        // Create timeout runnable so we can cancel it when write completes
+        val timeoutRunnable = Runnable {
+            if (continuation.isActive) {
+                Log.e(TAG, "TIME_REQUEST CCCD descriptor write timeout (5s)")
+                onDescriptorWriteCallback = null
+                continuation.resume(false) {}
+            }
+        }
+
+        // Set up callback for descriptor write completion
+        onDescriptorWriteCallback = { writeSuccess ->
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            if (writeSuccess) {
+                Log.i(TAG, "✓ TIME_REQUEST CCCD write SUCCESS - Indications enabled")
+            } else {
+                Log.e(TAG, "✗ TIME_REQUEST CCCD write FAILED - Indications NOT enabled")
+            }
+            continuation.resume(writeSuccess) {}
+            onDescriptorWriteCallback = null // Clear callback
+        }
+
+        descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        val writeSuccess = gatt.writeDescriptor(descriptor)
+
+        if (!writeSuccess) {
+            Log.e(TAG, "Failed to initiate TIME_REQUEST CCCD descriptor write")
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            onDescriptorWriteCallback = null
+            continuation.resume(false) {}
+        } else {
+            Log.i(TAG, "TIME_REQUEST CCCD descriptor write initiated, waiting for callback...")
+            // Timeout after 5 seconds
+            handler.postDelayed(timeoutRunnable, 5000)
+        }
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
         }
     }
 
@@ -760,12 +986,18 @@ class BleLiveConnectionService : Service() {
 
         if (writeSuccess) {
             Log.i(TAG, "DATA_RESPONSE CCCD write initiated")
-            // Assume success - we'll know if notifications don't arrive
-            handler.postDelayed({
+            // Create timeout runnable so we can cancel it on cancellation
+            val timeoutRunnable = Runnable {
                 if (continuation.isActive) {
                     continuation.resume(true) {}
                 }
-            }, 500)
+            }
+            // Assume success - we'll know if notifications don't arrive
+            handler.postDelayed(timeoutRunnable, 500)
+
+            continuation.invokeOnCancellation {
+                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            }
         } else {
             Log.e(TAG, "Failed to write DATA_RESPONSE CCCD")
             continuation.resume(false) {}
