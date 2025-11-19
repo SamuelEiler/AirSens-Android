@@ -66,9 +66,9 @@ dependencies {
     implementation 'androidx.bluetooth:bluetooth:1.0.0-alpha01'
 
     // Vico charts - modern, performant charting library with zoom/scroll support
-    // Using 1.x for Kotlin 1.8.0 compatibility
-    implementation 'com.patrykandpatrick.vico:core:1.15.0'
-    implementation 'com.patrykandpatrick.vico:views:1.15.0'
+    // Requires Kotlin 2.0.0
+    implementation 'com.patrykandpatrick.vico:core:2.0.0-alpha.28'
+    implementation 'com.patrykandpatrick.vico:views:2.0.0-alpha.28'
 
     // Room database
     implementation 'androidx.room:room-runtime:2.6.1'
