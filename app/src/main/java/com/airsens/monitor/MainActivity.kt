@@ -280,13 +280,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateGasResistanceChart() {
         lifecycleScope.launch {
-            if (gasResistanceData.isEmpty()) {
-                gasResistanceModelProducer.runTransaction {
-                    columnSeries()
-                }
-                return@launch
-            }
-
             // Vico 2.x expects x,y pairs where x is the timestamp (in seconds)
             val sortedData = gasResistanceData.sortedBy { it.first }
             val xValues = sortedData.map { it.first.toFloat() }
@@ -305,13 +298,6 @@ class MainActivity : AppCompatActivity() {
         while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
         lifecycleScope.launch {
-            if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
-                particleMatterModelProducer.runTransaction {
-                    lineSeries()
-                }
-                return@launch
-            }
-
             particleMatterModelProducer.runTransaction {
                 // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
                 // Each series needs its own x and y values
@@ -329,6 +315,9 @@ class MainActivity : AppCompatActivity() {
                 } else if (pm10Data.isNotEmpty()) {
                     val sorted = pm10Data.sortedBy { it.first }
                     lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                } else {
+                    // Empty data - pass empty lists
+                    lineSeries(emptyList(), emptyList())
                 }
             }
         }
@@ -340,13 +329,6 @@ class MainActivity : AppCompatActivity() {
         while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
         lifecycleScope.launch {
-            if (temperatureData.isEmpty() && humidityData.isEmpty()) {
-                tempHumidityModelProducer.runTransaction {
-                    lineSeries()
-                }
-                return@launch
-            }
-
             tempHumidityModelProducer.runTransaction {
                 // Vico 2.x lineSeries for Temperature and Humidity
                 if (temperatureData.isNotEmpty() && humidityData.isNotEmpty()) {
@@ -364,6 +346,9 @@ class MainActivity : AppCompatActivity() {
                 } else if (humidityData.isNotEmpty()) {
                     val sorted = humidityData.sortedBy { it.first }
                     lineSeries(sorted.map { it.first.toFloat() }, sorted.map { it.second })
+                } else {
+                    // Empty data - pass empty lists
+                    lineSeries(emptyList(), emptyList())
                 }
             }
         }
