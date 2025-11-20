@@ -16,7 +16,6 @@ import com.airsens.monitor.database.AppDatabase
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
-import com.patrykandpatrick.vico.core.cartesian.marker.DefaultCartesianMarker
 import com.patrykandpatrick.vico.views.cartesian.CartesianChartView
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -344,56 +343,10 @@ class MainActivity : AppCompatActivity() {
         tempHumidityChart.modelProducer = tempHumidityModelProducer
 
         // Axes are configured in XML with app:showStartAxis="true" and app:showBottomAxis="true"
-        // They will display automatically with numeric labels
+        // They will display automatically with numeric labels on the Y-axis and timestamps on X-axis
 
-        // Add interactive markers for touch/click to show values
-        try {
-            // Gas Resistance marker
-            val gasMarker = DefaultCartesianMarker.build(this) { markedEntries, _ ->
-                markedEntries.joinToString("\n") { entry ->
-                    val timestamp = entry.entry.x.toLong()
-                    val date = Date(timestamp * 1000)
-                    val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
-                    "$time\n${String.format("%.0f Ω", entry.entry.y)}"
-                }
-            }
-            gasResistanceChart.marker = gasMarker
-
-            // PM marker
-            val pmMarker = DefaultCartesianMarker.build(this) { markedEntries, _ ->
-                val timestamp = markedEntries.first().entry.x.toLong()
-                val date = Date(timestamp * 1000)
-                val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
-                val values = markedEntries.mapIndexed { index, entry ->
-                    val label = when (index) {
-                        0 -> "PM10"
-                        1 -> "PM2.5"
-                        else -> "PM1"
-                    }
-                    "$label: ${String.format("%.1f", entry.entry.y)} µg/m³"
-                }
-                "$time\n${values.joinToString("\n")}"
-            }
-            particleMatterChart.marker = pmMarker
-
-            // Temperature/Humidity marker
-            val tempMarker = DefaultCartesianMarker.build(this) { markedEntries, _ ->
-                val timestamp = markedEntries.first().entry.x.toLong()
-                val date = Date(timestamp * 1000)
-                val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
-                val values = markedEntries.mapIndexed { index, entry ->
-                    if (index == 0) {
-                        "Temp: ${String.format("%.1f°C", entry.entry.y)}"
-                    } else {
-                        "Humidity: ${String.format("%.0f%%", entry.entry.y)}"
-                    }
-                }
-                "$time\n${values.joinToString("\n")}"
-            }
-            tempHumidityChart.marker = tempMarker
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to configure chart markers: ${e.message}")
-        }
+        // TODO: Add interactive markers once we identify the correct Vico 2.0 alpha API
+        // For now, the axes will show numeric values and you can read them directly from the chart
 
         // Set initial empty data
         updateGasResistanceChart()
