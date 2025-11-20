@@ -448,25 +448,20 @@ class BleLiveConnectionService : Service() {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     Log.i(TAG, "Services discovered, setting up persistent connection...")
 
-                    // Enable time request indications
+                    // Setup all characteristics sequentially to avoid GATT queue conflicts
                     serviceScope.launch {
-                        val success = enableTimeRequestIndications(gatt)
-                        if (!success) {
+                        // Step 1: Enable time request indications
+                        val timeRequestSuccess = enableTimeRequestIndications(gatt)
+                        if (!timeRequestSuccess) {
                             Log.w(TAG, "Failed to enable TIME_REQUEST indications, but continuing anyway")
                         }
-                    }
 
-                    // Send initial time sync
-                    serviceScope.launch {
-                        delay(300)
-                        sendTimeSync(gatt)
-                    }
-
-                    // Subscribe to live measurements and bulk data
-                    serviceScope.launch {
+                        // Step 2: Send initial time sync (wait for TIME_REQUEST to complete)
                         delay(500)
+                        sendTimeSync(gatt)
 
-                        // Subscribe to live MEASUREMENT notifications (real-time data every 30s)
+                        // Step 3: Subscribe to live MEASUREMENT notifications (wait longer for GATT queue to clear)
+                        delay(1000)
                         val measurementSuccess = enableMeasurementNotifications(gatt)
                         if (!measurementSuccess) {
                             Log.e(TAG, "✗ Failed to subscribe to MEASUREMENT notifications")
@@ -478,9 +473,8 @@ class BleLiveConnectionService : Service() {
                         }
                         Log.i(TAG, "✓ Subscribed to live MEASUREMENT notifications")
 
-                        delay(300)
-
-                        // Subscribe to DATA_RESPONSE notifications (bulk data transfer)
+                        // Step 4: Subscribe to DATA_RESPONSE notifications (wait for MEASUREMENT to complete)
+                        delay(500)
                         val dataResponseSuccess = enableDataResponseNotifications(gatt)
                         if (!dataResponseSuccess) {
                             Log.e(TAG, "✗ Failed to subscribe to DATA_RESPONSE notifications")
@@ -492,11 +486,12 @@ class BleLiveConnectionService : Service() {
                         }
                         Log.i(TAG, "✓ Subscribed to DATA_RESPONSE notifications")
 
+                        // Connection fully established
                         if (continuation.isActive) {
                             continuation.resume(gatt) {}
                         }
 
-                        // Request initial bulk data sync after connection established
+                        // Step 5: Request initial bulk data sync after connection established
                         delay(500)
                         requestInitialBulkData(gatt)
                     }
@@ -733,26 +728,43 @@ class BleLiveConnectionService : Service() {
             return@suspendCancellableCoroutine
         }
 
+        // Create timeout runnable so we can cancel it when write completes
+        val timeoutRunnable = Runnable {
+            if (continuation.isActive) {
+                Log.e(TAG, "MEASUREMENT CCCD descriptor write timeout (5s)")
+                onDescriptorWriteCallback = null
+                continuation.resume(false) {}
+            }
+        }
+
+        // Set up callback for descriptor write completion
+        onDescriptorWriteCallback = { writeSuccess ->
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            if (writeSuccess) {
+                Log.i(TAG, "✓ MEASUREMENT CCCD write SUCCESS - Notifications enabled")
+            } else {
+                Log.e(TAG, "✗ MEASUREMENT CCCD write FAILED - Notifications NOT enabled")
+            }
+            continuation.resume(writeSuccess) {}
+            onDescriptorWriteCallback = null // Clear callback
+        }
+
         descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         val writeSuccess = gatt.writeDescriptor(descriptor)
 
-        if (writeSuccess) {
-            Log.i(TAG, "MEASUREMENT CCCD write initiated")
-            // Create timeout runnable so we can cancel it on cancellation
-            val timeoutRunnable = Runnable {
-                if (continuation.isActive) {
-                    continuation.resume(true) {}
-                }
-            }
-            // Assume success - we'll know if notifications don't arrive
-            handler.postDelayed(timeoutRunnable, 500)
-
-            continuation.invokeOnCancellation {
-                handler.removeCallbacks(timeoutRunnable) // Cancel timeout
-            }
-        } else {
-            Log.e(TAG, "Failed to write MEASUREMENT CCCD")
+        if (!writeSuccess) {
+            Log.e(TAG, "Failed to initiate MEASUREMENT CCCD descriptor write (GATT queue busy?)")
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
+            onDescriptorWriteCallback = null
             continuation.resume(false) {}
+        } else {
+            Log.i(TAG, "MEASUREMENT CCCD descriptor write initiated, waiting for callback...")
+            // Timeout after 5 seconds
+            handler.postDelayed(timeoutRunnable, 5000)
+        }
+
+        continuation.invokeOnCancellation {
+            handler.removeCallbacks(timeoutRunnable) // Cancel timeout
         }
     }
 
