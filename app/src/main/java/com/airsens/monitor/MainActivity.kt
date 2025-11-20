@@ -34,6 +34,8 @@ class MainActivity : AppCompatActivity() {
     // UI Components
     private lateinit var statusText: TextView
     private lateinit var dataContainer: ScrollView
+    private lateinit var lastHourButton: Button
+    private lateinit var allDataButton: Button
 
     // Data display views
     private lateinit var pm10Text: TextView
@@ -58,12 +60,20 @@ class MainActivity : AppCompatActivity() {
     private val particleMatterModelProducer = CartesianChartModelProducer()
     private val tempHumidityModelProducer = CartesianChartModelProducer()
 
-    // Data storage for charts with timestamps
-    private val gasResistanceData = mutableListOf<Pair<Long, Float>>() // timestamp -> gas resistance
-    private val pm10Data = mutableListOf<Pair<Long, Float>>() // timestamp -> value
+    // Full data storage (unfiltered)
+    private val fullGasResistanceData = mutableListOf<Pair<Long, Float>>()
+    private val fullPm10Data = mutableListOf<Pair<Long, Float>>()
+    private val fullPm25Data = mutableListOf<Pair<Long, Float>>()
+    private val fullPm1Data = mutableListOf<Pair<Long, Float>>()
+    private val fullTemperatureData = mutableListOf<Pair<Long, Float>>()
+    private val fullHumidityData = mutableListOf<Pair<Long, Float>>()
+
+    // Filtered data storage for charts (what's currently displayed)
+    private val gasResistanceData = mutableListOf<Pair<Long, Float>>()
+    private val pm10Data = mutableListOf<Pair<Long, Float>>()
     private val pm25Data = mutableListOf<Pair<Long, Float>>()
     private val pm1Data = mutableListOf<Pair<Long, Float>>()
-    private val temperatureData = mutableListOf<Pair<Long, Float>>() // timestamp -> value
+    private val temperatureData = mutableListOf<Pair<Long, Float>>()
     private val humidityData = mutableListOf<Pair<Long, Float>>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,6 +115,19 @@ class MainActivity : AppCompatActivity() {
         gasResistanceChart = findViewById(R.id.gasResistanceChart)
         particleMatterChart = findViewById(R.id.particleMatterChart)
         tempHumidityChart = findViewById(R.id.tempHumidityChart)
+
+        // Chart control buttons
+        lastHourButton = findViewById(R.id.lastHourButton)
+        allDataButton = findViewById(R.id.allDataButton)
+
+        // Set up button click listeners
+        lastHourButton.setOnClickListener {
+            filterChartsToLastHour()
+        }
+
+        allDataButton.setOnClickListener {
+            showAllChartData()
+        }
 
         // Initialize charts
         initializeCharts()
@@ -178,37 +201,40 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUIWithMeasurements(measurements: List<com.airsens.monitor.database.MeasurementEntity>) {
         // Clear existing data
-        pm10Data.clear()
-        pm25Data.clear()
-        pm1Data.clear()
-        temperatureData.clear()
-        humidityData.clear()
-        gasResistanceData.clear()
+        fullPm10Data.clear()
+        fullPm25Data.clear()
+        fullPm1Data.clear()
+        fullTemperatureData.clear()
+        fullHumidityData.clear()
+        fullGasResistanceData.clear()
 
         if (measurements.isEmpty()) {
             return
         }
 
-        // Vico handles timestamps natively! Use actual measurement timestamps
+        // Store all data in full data lists
         measurements.forEach { measurement ->
             val timestamp = measurement.timestamp
 
-            pm10Data.add(Pair(timestamp, measurement.pm10))
-            pm25Data.add(Pair(timestamp, measurement.pm25))
-            pm1Data.add(Pair(timestamp, measurement.pm1))
+            fullPm10Data.add(Pair(timestamp, measurement.pm10))
+            fullPm25Data.add(Pair(timestamp, measurement.pm25))
+            fullPm1Data.add(Pair(timestamp, measurement.pm1))
 
             measurement.temperature?.let {
-                temperatureData.add(Pair(timestamp, it))
+                fullTemperatureData.add(Pair(timestamp, it))
             }
 
             measurement.humidity?.let {
-                humidityData.add(Pair(timestamp, it))
+                fullHumidityData.add(Pair(timestamp, it))
             }
 
             measurement.gasResistance?.let {
-                gasResistanceData.add(Pair(timestamp, it))
+                fullGasResistanceData.add(Pair(timestamp, it))
             }
         }
+
+        // By default, show all data
+        showAllChartData()
 
         // Update charts on UI thread
         runOnUiThread {
@@ -368,6 +394,67 @@ class MainActivity : AppCompatActivity() {
         updateGasResistanceChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
+    }
+
+    private fun filterChartsToLastHour() {
+        val now = System.currentTimeMillis() / 1000 // Current time in seconds
+        val oneHourAgo = now - 3600 // 1 hour = 3600 seconds
+
+        // Filter all data to last hour
+        gasResistanceData.clear()
+        gasResistanceData.addAll(fullGasResistanceData.filter { it.first >= oneHourAgo })
+
+        pm10Data.clear()
+        pm10Data.addAll(fullPm10Data.filter { it.first >= oneHourAgo })
+
+        pm25Data.clear()
+        pm25Data.addAll(fullPm25Data.filter { it.first >= oneHourAgo })
+
+        pm1Data.clear()
+        pm1Data.addAll(fullPm1Data.filter { it.first >= oneHourAgo })
+
+        temperatureData.clear()
+        temperatureData.addAll(fullTemperatureData.filter { it.first >= oneHourAgo })
+
+        humidityData.clear()
+        humidityData.addAll(fullHumidityData.filter { it.first >= oneHourAgo })
+
+        // Update all charts with filtered data
+        updateGasResistanceChart()
+        updateParticleMatterChart()
+        updateTempHumidityChart()
+
+        Toast.makeText(this, "Showing data from last hour", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showAllChartData() {
+        // Copy all full data to filtered data
+        gasResistanceData.clear()
+        gasResistanceData.addAll(fullGasResistanceData)
+
+        pm10Data.clear()
+        pm10Data.addAll(fullPm10Data)
+
+        pm25Data.clear()
+        pm25Data.addAll(fullPm25Data)
+
+        pm1Data.clear()
+        pm1Data.addAll(fullPm1Data)
+
+        temperatureData.clear()
+        temperatureData.addAll(fullTemperatureData)
+
+        humidityData.clear()
+        humidityData.addAll(fullHumidityData)
+
+        // Update all charts with full data
+        updateGasResistanceChart()
+        updateParticleMatterChart()
+        updateTempHumidityChart()
+
+        if (fullPm10Data.isNotEmpty()) {
+            Toast.makeText(this, "Showing all data (${fullPm10Data.size} points)", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun getIAQAccuracyString(accuracy: Int): String {
