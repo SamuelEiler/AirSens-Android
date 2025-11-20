@@ -15,7 +15,13 @@ import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
 import com.github.mikephil.charting.charts.BarChart
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.data.*
+import com.github.mikephil.charting.data.BarData
+import com.github.mikephil.charting.data.BarDataSet
+import com.github.mikephil.charting.data.BarEntry
+import com.github.mikephil.charting.data.Entry
+import com.github.mikephil.charting.data.LineData
+import com.github.mikephil.charting.data.LineDataSet
+import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.components.Legend
