@@ -894,6 +894,8 @@ class BleLiveConnectionService : Service() {
             val sensorMask = buffer.get(0).toInt() and 0xFF
             val hasBME690 = (sensorMask and 0x02) != 0
 
+            Log.d(TAG, "🔍 Parsing measurement: dataSize=${data.size}, sensorMask=0x${sensorMask.toString(16)}, hasBME690=$hasBME690")
+
             // Read timestamp
             val timestamp = buffer.getInt(1).toLong() and 0xFFFFFFFFL
 
@@ -916,11 +918,21 @@ class BleLiveConnectionService : Service() {
             var gasResistance: Float? = null
 
             if (hasBME690 && data.size >= 38) {
-                temperature = buffer.getFloat(18)
-                humidity = buffer.getFloat(22)
-                pressure = buffer.getFloat(26)
-                iaq = buffer.getFloat(30)
-                gasResistance = buffer.getFloat(34)
+                val rawTemp = buffer.getFloat(18)
+                val rawHumid = buffer.getFloat(22)
+                val rawPress = buffer.getFloat(26)
+                val rawIaq = buffer.getFloat(30)
+                val rawGasRes = buffer.getFloat(34)
+
+                Log.d(TAG, "🌡️ Raw BME690 data: temp=$rawTemp, humid=$rawHumid, press=$rawPress, iaq=$rawIaq, gasRes=$rawGasRes")
+
+                temperature = rawTemp
+                humidity = rawHumid
+                pressure = rawPress
+                iaq = rawIaq
+                gasResistance = rawGasRes
+            } else {
+                Log.w(TAG, "⚠️ BME690 data not available: hasBME690=$hasBME690, dataSize=${data.size} (need >=38)")
             }
 
             return AirQualitySensorClient.MeasurementData(
