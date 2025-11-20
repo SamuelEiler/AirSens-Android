@@ -16,6 +16,10 @@ import com.airsens.monitor.database.AppDatabase
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
+import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
+import com.patrykandpatrick.vico.core.cartesian.axis.HorizontalAxis
+import com.patrykandpatrick.vico.core.cartesian.marker.DefaultCartesianMarker
+import com.patrykandpatrick.vico.core.common.component.TextComponent
 import com.patrykandpatrick.vico.views.cartesian.CartesianChartView
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -337,14 +341,139 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeCharts() {
-        // Vico 2.x: Assign model producers - charts are auto-configured from data type
+        // Vico 2.x: Assign model producers
         gasResistanceChart.modelProducer = gasResistanceModelProducer
         particleMatterChart.modelProducer = particleMatterModelProducer
         tempHumidityChart.modelProducer = tempHumidityModelProducer
 
-        // Axes are configured in XML with app:showStartAxis="true" and app:showBottomAxis="true"
-        // Y-axis will show values automatically based on the data range
-        // X-axis will show timestamps automatically
+        // Configure Gas Resistance Chart
+        val gasResistanceAxis = VerticalAxis.Builder<VerticalAxis.Position.Vertical.Start>()
+            .label(
+                TextComponent.Builder()
+                    .build()
+            )
+            .valueFormatter { value, _ ->
+                String.format("%.0f Ω", value)
+            }
+            .build()
+
+        val gasTimeAxis = HorizontalAxis.Builder<HorizontalAxis.Position.Horizontal.Bottom>()
+            .label(
+                TextComponent.Builder()
+                    .build()
+            )
+            .valueFormatter { value, _ ->
+                val date = Date((value * 1000).toLong())
+                SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            }
+            .build()
+
+        // Configure PM Chart
+        val pmAxis = VerticalAxis.Builder<VerticalAxis.Position.Vertical.Start>()
+            .label(
+                TextComponent.Builder()
+                    .build()
+            )
+            .valueFormatter { value, _ ->
+                String.format("%.0f µg/m³", value)
+            }
+            .build()
+
+        val pmTimeAxis = HorizontalAxis.Builder<HorizontalAxis.Position.Horizontal.Bottom>()
+            .label(
+                TextComponent.Builder()
+                    .build()
+            )
+            .valueFormatter { value, _ ->
+                val date = Date((value * 1000).toLong())
+                SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            }
+            .build()
+
+        // Configure Temp/Humidity Chart
+        val tempAxis = VerticalAxis.Builder<VerticalAxis.Position.Vertical.Start>()
+            .label(
+                TextComponent.Builder()
+                    .build()
+            )
+            .valueFormatter { value, _ ->
+                // Show temperature (0-40) with °C, humidity (0-100) with %
+                if (value <= 50) {
+                    String.format("%.1f°C", value)
+                } else {
+                    String.format("%.0f%%", value)
+                }
+            }
+            .build()
+
+        val tempTimeAxis = HorizontalAxis.Builder<HorizontalAxis.Position.Horizontal.Bottom>()
+            .label(
+                TextComponent.Builder()
+                    .build()
+            )
+            .valueFormatter { value, _ ->
+                val date = Date((value * 1000).toLong())
+                SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            }
+            .build()
+
+        // Create interactive markers for click/touch
+        val gasMarker = DefaultCartesianMarker.build(this) { markedEntries, _ ->
+            markedEntries.joinToString("\n") { entry ->
+                val timestamp = entry.entry.x.toLong()
+                val date = Date(timestamp * 1000)
+                val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
+                "$time\n${String.format("%.0f Ω", entry.entry.y)}"
+            }
+        }
+
+        val pmMarker = DefaultCartesianMarker.build(this) { markedEntries, _ ->
+            val timestamp = markedEntries.first().entry.x.toLong()
+            val date = Date(timestamp * 1000)
+            val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
+            val values = markedEntries.mapIndexed { index, entry ->
+                val label = when (index) {
+                    0 -> "PM10"
+                    1 -> "PM2.5"
+                    else -> "PM1"
+                }
+                "$label: ${String.format("%.1f", entry.entry.y)} µg/m³"
+            }
+            "$time\n${values.joinToString("\n")}"
+        }
+
+        val tempMarker = DefaultCartesianMarker.build(this) { markedEntries, _ ->
+            val timestamp = markedEntries.first().entry.x.toLong()
+            val date = Date(timestamp * 1000)
+            val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
+            val values = markedEntries.mapIndexed { index, entry ->
+                if (index == 0) {
+                    "Temp: ${String.format("%.1f°C", entry.entry.y)}"
+                } else {
+                    "Humidity: ${String.format("%.0f%%", entry.entry.y)}"
+                }
+            }
+            "$time\n${values.joinToString("\n")}"
+        }
+
+        // Apply configurations to charts
+        gasResistanceChart.chart = gasResistanceChart.chart?.copy(
+            startAxis = gasResistanceAxis,
+            bottomAxis = gasTimeAxis
+        )
+        gasResistanceChart.marker = gasMarker
+
+        particleMatterChart.chart = particleMatterChart.chart?.copy(
+            startAxis = pmAxis,
+            bottomAxis = pmTimeAxis
+        )
+        particleMatterChart.marker = pmMarker
+
+        tempHumidityChart.chart = tempHumidityChart.chart?.copy(
+            startAxis = tempAxis,
+            bottomAxis = tempTimeAxis
+        )
+        tempHumidityChart.marker = tempMarker
 
         // Set initial empty data
         updateGasResistanceChart()
