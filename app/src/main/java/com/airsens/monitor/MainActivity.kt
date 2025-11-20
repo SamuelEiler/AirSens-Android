@@ -36,7 +36,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val REQUEST_PERMISSIONS = 2
-        private const val MAX_CHART_ENTRIES = 50 // Max data points to show in history charts
+        private const val MAX_CHART_ENTRIES = 500 // Max data points to show in history charts
     }
 
     private lateinit var database: AppDatabase
@@ -365,6 +365,15 @@ class MainActivity : AppCompatActivity() {
         chart.setPinchZoom(true)
         chart.setScaleEnabled(true)
 
+        // Enable scrolling/dragging
+        chart.isDragEnabled = true
+        chart.setScaleXEnabled(true)  // Enable X-axis scaling
+        chart.setScaleYEnabled(true)  // Enable Y-axis scaling
+
+        // Set visible range (show ~50 data points initially, can scroll to see more)
+        chart.setVisibleXRangeMaximum(50f * 30f)  // ~25 minutes visible (50 points * 30 seconds)
+        chart.setVisibleXRangeMinimum(10f * 30f)  // Min zoom shows 10 points
+
         // X-axis configuration
         val xAxis = chart.xAxis
         xAxis.position = XAxis.XAxisPosition.BOTTOM
@@ -410,6 +419,15 @@ class MainActivity : AppCompatActivity() {
         chart.setDrawGridBackground(false)
         chart.setPinchZoom(true)
         chart.setScaleEnabled(true)
+
+        // Enable scrolling/dragging
+        chart.isDragEnabled = true
+        chart.setScaleXEnabled(true)  // Enable X-axis scaling
+        chart.setScaleYEnabled(true)  // Enable Y-axis scaling
+
+        // Set visible range (show ~50 data points initially, can scroll to see more)
+        chart.setVisibleXRangeMaximum(50f * 30f)  // ~25 minutes visible (50 points * 30 seconds)
+        chart.setVisibleXRangeMinimum(10f * 30f)  // Min zoom shows 10 points
 
         // X-axis configuration
         val xAxis = chart.xAxis
