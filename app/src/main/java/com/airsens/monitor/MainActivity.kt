@@ -367,8 +367,11 @@ class MainActivity : AppCompatActivity() {
 
         // Enable scrolling/dragging
         chart.isDragEnabled = true
-        chart.setScaleXEnabled(true)  // Enable X-axis scaling
-        chart.setScaleYEnabled(true)  // Enable Y-axis scaling
+        chart.setScaleXEnabled(true)   // Enable X-axis scaling (time)
+        chart.setScaleYEnabled(false)  // Disable Y-axis scaling (auto-scale instead)
+
+        // Auto-scale Y-axis to fit visible data
+        chart.isAutoScaleMinMaxEnabled = true
 
         // Set visible range (show ~50 data points initially, can scroll to see more)
         chart.setVisibleXRangeMaximum(50f * 30f)  // ~25 minutes visible (50 points * 30 seconds)
@@ -422,8 +425,11 @@ class MainActivity : AppCompatActivity() {
 
         // Enable scrolling/dragging
         chart.isDragEnabled = true
-        chart.setScaleXEnabled(true)  // Enable X-axis scaling
-        chart.setScaleYEnabled(true)  // Enable Y-axis scaling
+        chart.setScaleXEnabled(true)   // Enable X-axis scaling (time)
+        chart.setScaleYEnabled(false)  // Disable Y-axis scaling (auto-scale instead)
+
+        // Auto-scale Y-axis to fit visible data
+        chart.isAutoScaleMinMaxEnabled = true
 
         // Set visible range (show ~50 data points initially, can scroll to see more)
         chart.setVisibleXRangeMaximum(50f * 30f)  // ~25 minutes visible (50 points * 30 seconds)
