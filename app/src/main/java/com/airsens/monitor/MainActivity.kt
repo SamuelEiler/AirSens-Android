@@ -210,9 +210,23 @@ class MainActivity : AppCompatActivity() {
             try {
                 // Load last 50 measurements from database
                 val measurements = database.measurementDao().getLastN(MAX_CHART_ENTRIES)
-                if (measurements.isNotEmpty()) {
-                    updateUIWithMeasurements(measurements)
+                Log.d(TAG, "🔍 Database check: Found ${measurements.size} measurements")
+
+                if (measurements.isEmpty()) {
+                    Log.w(TAG, "⚠️ No data in database - charts will be empty")
+                    runOnUiThread {
+                        bleConnectionStatus.text = "BLE: Waiting for data..."
+                        bleConnectionStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
+                    }
+                    return@launch
                 }
+
+                val latest = measurements.first()
+                Log.d(TAG, "📊 Latest data: PM10=${latest.pm10}, PM2.5=${latest.pm25}, " +
+                        "Temp=${latest.temperature}, Humidity=${latest.humidity}, " +
+                        "GasRes=${latest.gasResistance}, Timestamp=${latest.timestamp}")
+
+                updateUIWithMeasurements(measurements)
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading historical data", e)
                 runOnUiThread {
@@ -258,6 +272,11 @@ class MainActivity : AppCompatActivity() {
 
         // By default, show all data
         showAllChartData()
+
+        // Log chart data counts
+        Log.d(TAG, "📈 Chart data loaded: Gas=${fullGasResistanceData.size}, " +
+                "PM10=${fullPm10Data.size}, PM2.5=${fullPm25Data.size}, " +
+                "Temp=${fullTemperatureData.size}, Humidity=${fullHumidityData.size}")
 
         // Update charts on UI thread
         runOnUiThread {
@@ -336,7 +355,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateGasResistanceChart() {
         lifecycleScope.launch {
             // Only update if we have data (Vico doesn't allow empty series)
-            if (gasResistanceData.isEmpty()) return@launch
+            if (gasResistanceData.isEmpty()) {
+                Log.w(TAG, "⚠️ Gas resistance chart: No data to display")
+                return@launch
+            }
+
+            Log.d(TAG, "📊 Updating gas resistance chart with ${gasResistanceData.size} points")
 
             // Vico 2.x expects x,y pairs where x is the timestamp (in seconds)
             val sortedData = gasResistanceData.sortedBy { it.first }
@@ -348,6 +372,7 @@ class MainActivity : AppCompatActivity() {
                     series(xValues, yValues)
                 }
             }
+            Log.d(TAG, "✓ Gas resistance chart updated successfully")
         }
     }
 
@@ -359,7 +384,12 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             // Only update if we have at least one data series (Vico doesn't allow empty series)
-            if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) return@launch
+            if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
+                Log.w(TAG, "⚠️ Particle matter chart: No data to display")
+                return@launch
+            }
+
+            Log.d(TAG, "📊 Updating PM chart with PM10=${pm10Data.size}, PM2.5=${pm25Data.size}, PM1=${pm1Data.size} points")
 
             particleMatterModelProducer.runTransaction {
                 // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
@@ -378,6 +408,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            Log.d(TAG, "✓ Particle matter chart updated successfully")
         }
     }
 
@@ -388,7 +419,12 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             // Only update if we have at least one data series (Vico doesn't allow empty series)
-            if (temperatureData.isEmpty() && humidityData.isEmpty()) return@launch
+            if (temperatureData.isEmpty() && humidityData.isEmpty()) {
+                Log.w(TAG, "⚠️ Temp/Humidity chart: No data to display")
+                return@launch
+            }
+
+            Log.d(TAG, "📊 Updating Temp/Humidity chart with Temp=${temperatureData.size}, Humidity=${humidityData.size} points")
 
             tempHumidityModelProducer.runTransaction {
                 // Vico 2.x lineSeries for Temperature and Humidity
@@ -403,6 +439,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            Log.d(TAG, "✓ Temp/Humidity chart updated successfully")
         }
     }
 
