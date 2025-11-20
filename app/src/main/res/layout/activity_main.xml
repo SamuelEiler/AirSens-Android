@@ -316,7 +316,9 @@
                     android:id="@+id/gasResistanceChart"
                     android:layout_width="match_parent"
                     android:layout_height="200dp"
-                    app:layers="column" />
+                    app:layers="column"
+                    app:showStartAxis="true"
+                    app:showBottomAxis="true" />
 
             </LinearLayout>
 
@@ -345,7 +347,9 @@
                     android:id="@+id/particleMatterChart"
                     android:layout_width="match_parent"
                     android:layout_height="250dp"
-                    app:layers="line" />
+                    app:layers="line"
+                    app:showStartAxis="true"
+                    app:showBottomAxis="true" />
 
             </LinearLayout>
 
@@ -374,7 +378,9 @@
                     android:id="@+id/tempHumidityChart"
                     android:layout_width="match_parent"
                     android:layout_height="250dp"
-                    app:layers="line" />
+                    app:layers="line"
+                    app:showStartAxis="true"
+                    app:showBottomAxis="true" />
 
             </LinearLayout>
 
