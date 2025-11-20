@@ -16,10 +16,6 @@ import com.airsens.monitor.database.AppDatabase
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
-import com.patrykandpatrick.vico.core.cartesian.axis.AxisPosition
-import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
-import com.patrykandpatrick.vico.core.cartesian.axis.HorizontalAxis
-import com.patrykandpatrick.vico.core.common.data.ExtraStore
 import com.patrykandpatrick.vico.views.cartesian.CartesianChartView
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -346,56 +342,9 @@ class MainActivity : AppCompatActivity() {
         particleMatterChart.modelProducer = particleMatterModelProducer
         tempHumidityChart.modelProducer = tempHumidityModelProducer
 
-        // Configure axes to show value labels
-        // Gas Resistance Chart - Y axis shows resistance values
-        gasResistanceChart.chart = gasResistanceChart.chart?.copy(
-            startAxis = VerticalAxis.Builder()
-                .setLabel { value, _ ->
-                    String.format("%.0f Ω", value)
-                }
-                .build(),
-            bottomAxis = HorizontalAxis.Builder()
-                .setLabel { value, _ ->
-                    val date = Date((value * 1000).toLong())
-                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
-                }
-                .build()
-        )
-
-        // Particle Matter Chart - Y axis shows µg/m³
-        particleMatterChart.chart = particleMatterChart.chart?.copy(
-            startAxis = VerticalAxis.Builder()
-                .setLabel { value, _ ->
-                    String.format("%.0f µg/m³", value)
-                }
-                .build(),
-            bottomAxis = HorizontalAxis.Builder()
-                .setLabel { value, _ ->
-                    val date = Date((value * 1000).toLong())
-                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
-                }
-                .build()
-        )
-
-        // Temperature & Humidity Chart - Y axis shows temperature (°C) and humidity (%)
-        tempHumidityChart.chart = tempHumidityChart.chart?.copy(
-            startAxis = VerticalAxis.Builder()
-                .setLabel { value, _ ->
-                    // Format based on value range (temp is typically 0-40, humidity is 0-100)
-                    if (value <= 50) {
-                        String.format("%.1f°C", value)
-                    } else {
-                        String.format("%.0f%%", value)
-                    }
-                }
-                .build(),
-            bottomAxis = HorizontalAxis.Builder()
-                .setLabel { value, _ ->
-                    val date = Date((value * 1000).toLong())
-                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
-                }
-                .build()
-        )
+        // Axes are configured in XML with app:showStartAxis="true" and app:showBottomAxis="true"
+        // Y-axis will show values automatically based on the data range
+        // X-axis will show timestamps automatically
 
         // Set initial empty data
         updateGasResistanceChart()
