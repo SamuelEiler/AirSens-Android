@@ -394,13 +394,14 @@ class BleLiveConnectionService : Service() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
-                        Log.i(TAG, "BLE connected, discovering services...")
+                        Log.i(TAG, "BLE connected, requesting MTU 256...")
                         if (ActivityCompat.checkSelfPermission(
                                 this@BleLiveConnectionService,
                                 Manifest.permission.BLUETOOTH_CONNECT
                             ) == PackageManager.PERMISSION_GRANTED
                         ) {
-                            gatt.discoverServices()
+                            // Request larger MTU to receive full 38-byte live measurements
+                            gatt.requestMtu(256)
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
@@ -423,6 +424,23 @@ class BleLiveConnectionService : Service() {
                             updateNotification("Disconnected, reconnecting...")
                         }
                     }
+                }
+            }
+
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    Log.i(TAG, "✓ MTU changed to $mtu bytes (payload: ${mtu - 3} bytes)")
+                } else {
+                    Log.w(TAG, "⚠️ MTU change failed (status=$status), using default MTU 23")
+                }
+
+                // Discover services after MTU negotiation
+                if (ActivityCompat.checkSelfPermission(
+                        this@BleLiveConnectionService,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    gatt.discoverServices()
                 }
             }
 
