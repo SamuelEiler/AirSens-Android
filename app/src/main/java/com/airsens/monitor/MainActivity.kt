@@ -13,10 +13,14 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
-import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
-import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
-import com.patrykandpatrick.vico.views.cartesian.CartesianChartView
+import com.github.mikephil.charting.charts.BarChart
+import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.data.*
+import com.github.mikephil.charting.formatter.ValueFormatter
+import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.components.Legend
+import com.github.mikephil.charting.highlight.Highlight
+import com.github.mikephil.charting.listener.OnChartValueSelectedListener
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -52,15 +56,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var obstructedText: TextView
     private lateinit var iaqAccuracyText: TextView
 
-    // Chart views (Vico 2.x)
-    private lateinit var gasResistanceChart: CartesianChartView
-    private lateinit var particleMatterChart: CartesianChartView
-    private lateinit var tempHumidityChart: CartesianChartView
-
-    // Vico 2.x chart model producers
-    private val gasResistanceModelProducer = CartesianChartModelProducer()
-    private val particleMatterModelProducer = CartesianChartModelProducer()
-    private val tempHumidityModelProducer = CartesianChartModelProducer()
+    // Chart views (MPAndroidChart)
+    private lateinit var gasResistanceChart: BarChart
+    private lateinit var particleMatterChart: LineChart
+    private lateinit var tempHumidityChart: LineChart
 
     // Full data storage (unfiltered)
     private val fullGasResistanceData = mutableListOf<Pair<Long, Float>>()
@@ -337,16 +336,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeCharts() {
-        // Vico 2.x: Assign model producers
-        gasResistanceChart.modelProducer = gasResistanceModelProducer
-        particleMatterChart.modelProducer = particleMatterModelProducer
-        tempHumidityChart.modelProducer = tempHumidityModelProducer
+        // Configure Gas Resistance Chart (Bar Chart)
+        configureBarChart(gasResistanceChart, "Gas Resistance (Ω)")
 
-        // Axes are configured in XML with app:showStartAxis="true" and app:showBottomAxis="true"
-        // They will display automatically with numeric labels on the Y-axis and timestamps on X-axis
+        // Configure Particle Matter Chart (Line Chart with 3 series)
+        configureLineChart(particleMatterChart, "Particle Matter (µg/m³)")
 
-        // TODO: Add interactive markers once we identify the correct Vico 2.0 alpha API
-        // For now, the axes will show numeric values and you can read them directly from the chart
+        // Configure Temperature/Humidity Chart (Line Chart with 2 series)
+        configureLineChart(tempHumidityChart, "Temperature (°C) / Humidity (%)")
 
         // Set initial empty data
         updateGasResistanceChart()
@@ -354,28 +351,110 @@ class MainActivity : AppCompatActivity() {
         updateTempHumidityChart()
     }
 
-    private fun updateGasResistanceChart() {
-        lifecycleScope.launch {
-            // Only update if we have data (Vico doesn't allow empty series)
-            if (gasResistanceData.isEmpty()) {
-                Log.w(TAG, "⚠️ Gas resistance chart: No data to display")
-                return@launch
+    private fun configureBarChart(chart: BarChart, description: String) {
+        chart.description.text = description
+        chart.description.textSize = 12f
+        chart.setTouchEnabled(true)
+        chart.setDrawGridBackground(false)
+        chart.setPinchZoom(true)
+        chart.setScaleEnabled(true)
+
+        // X-axis configuration
+        val xAxis = chart.xAxis
+        xAxis.position = XAxis.XAxisPosition.BOTTOM
+        xAxis.setDrawGridLines(true)
+        xAxis.granularity = 1f
+        xAxis.valueFormatter = object : ValueFormatter() {
+            override fun getFormattedValue(value: Float): String {
+                val date = Date(value.toLong() * 1000)
+                return SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
             }
+        }
 
-            Log.d(TAG, "📊 Updating gas resistance chart with ${gasResistanceData.size} points")
+        // Y-axis configuration
+        chart.axisLeft.setDrawGridLines(true)
+        chart.axisLeft.granularity = 1f
+        chart.axisRight.isEnabled = false
 
-            // Vico 2.x expects x,y pairs where x is the timestamp (in seconds)
-            val sortedData = gasResistanceData.sortedBy { it.first }
-            val xValues = sortedData.map { it.first.toFloat() }
-            val yValues = sortedData.map { it.second }
+        // Legend
+        chart.legend.isEnabled = false
 
-            gasResistanceModelProducer.runTransaction {
-                columnSeries {
-                    series(xValues, yValues)
+        // Interactive marker
+        chart.setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
+            override fun onValueSelected(e: Entry?, h: Highlight?) {
+                if (e != null) {
+                    val timestamp = e.x.toLong()
+                    val date = Date(timestamp * 1000)
+                    val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "$time\n${String.format("%.0f Ω", e.y)}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
-            Log.d(TAG, "✓ Gas resistance chart updated successfully")
+            override fun onNothingSelected() {}
+        })
+    }
+
+    private fun configureLineChart(chart: LineChart, description: String) {
+        chart.description.text = description
+        chart.description.textSize = 12f
+        chart.setTouchEnabled(true)
+        chart.setDrawGridBackground(false)
+        chart.setPinchZoom(true)
+        chart.setScaleEnabled(true)
+
+        // X-axis configuration
+        val xAxis = chart.xAxis
+        xAxis.position = XAxis.XAxisPosition.BOTTOM
+        xAxis.setDrawGridLines(true)
+        xAxis.granularity = 1f
+        xAxis.valueFormatter = object : ValueFormatter() {
+            override fun getFormattedValue(value: Float): String {
+                val date = Date(value.toLong() * 1000)
+                return SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            }
         }
+
+        // Y-axis configuration
+        chart.axisLeft.setDrawGridLines(true)
+        chart.axisLeft.granularity = 1f
+        chart.axisRight.isEnabled = false
+
+        // Legend
+        chart.legend.verticalAlignment = Legend.LegendVerticalAlignment.TOP
+        chart.legend.horizontalAlignment = Legend.LegendHorizontalAlignment.RIGHT
+        chart.legend.orientation = Legend.LegendOrientation.VERTICAL
+        chart.legend.setDrawInside(true)
+    }
+
+    private fun updateGasResistanceChart() {
+        if (gasResistanceData.isEmpty()) {
+            Log.w(TAG, "⚠️ Gas resistance chart: No data to display")
+            gasResistanceChart.clear()
+            gasResistanceChart.invalidate()
+            return
+        }
+
+        Log.d(TAG, "📊 Updating gas resistance chart with ${gasResistanceData.size} points")
+
+        // Create bar entries (x = timestamp in seconds, y = resistance value)
+        val entries = gasResistanceData.sortedBy { it.first }.map { (timestamp, value) ->
+            BarEntry(timestamp.toFloat(), value)
+        }
+
+        val dataSet = BarDataSet(entries, "Gas Resistance")
+        dataSet.color = Color.rgb(104, 241, 175)
+        dataSet.valueTextColor = Color.BLACK
+        dataSet.valueTextSize = 9f
+
+        val barData = BarData(dataSet)
+        gasResistanceChart.data = barData
+        gasResistanceChart.notifyDataSetChanged()
+        gasResistanceChart.invalidate()
+
+        Log.d(TAG, "✓ Gas resistance chart updated successfully")
     }
 
     private fun updateParticleMatterChart() {
@@ -384,34 +463,65 @@ class MainActivity : AppCompatActivity() {
         while (pm25Data.size > MAX_CHART_ENTRIES) pm25Data.removeAt(0)
         while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
-        lifecycleScope.launch {
-            // Only update if we have at least one data series (Vico doesn't allow empty series)
-            if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
-                Log.w(TAG, "⚠️ Particle matter chart: No data to display")
-                return@launch
-            }
-
-            Log.d(TAG, "📊 Updating PM chart with PM10=${pm10Data.size}, PM2.5=${pm25Data.size}, PM1=${pm1Data.size} points")
-
-            particleMatterModelProducer.runTransaction {
-                // Vico 2.x lineSeries with multiple series for PM10, PM2.5, PM1.0
-                lineSeries {
-                    if (pm10Data.isNotEmpty()) {
-                        val sorted = pm10Data.sortedBy { it.first }
-                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                    }
-                    if (pm25Data.isNotEmpty()) {
-                        val sorted = pm25Data.sortedBy { it.first }
-                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                    }
-                    if (pm1Data.isNotEmpty()) {
-                        val sorted = pm1Data.sortedBy { it.first }
-                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                    }
-                }
-            }
-            Log.d(TAG, "✓ Particle matter chart updated successfully")
+        if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
+            Log.w(TAG, "⚠️ Particle matter chart: No data to display")
+            particleMatterChart.clear()
+            particleMatterChart.invalidate()
+            return
         }
+
+        Log.d(TAG, "📊 Updating PM chart with PM10=${pm10Data.size}, PM2.5=${pm25Data.size}, PM1=${pm1Data.size} points")
+
+        val dataSets = mutableListOf<ILineDataSet>()
+
+        // PM10 dataset
+        if (pm10Data.isNotEmpty()) {
+            val entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) ->
+                Entry(timestamp.toFloat(), value)
+            }
+            val dataSet = LineDataSet(entries, "PM10")
+            dataSet.color = Color.rgb(255, 99, 71)
+            dataSet.setCircleColor(Color.rgb(255, 99, 71))
+            dataSet.lineWidth = 2f
+            dataSet.circleRadius = 3f
+            dataSet.setDrawValues(false)
+            dataSets.add(dataSet)
+        }
+
+        // PM2.5 dataset
+        if (pm25Data.isNotEmpty()) {
+            val entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) ->
+                Entry(timestamp.toFloat(), value)
+            }
+            val dataSet = LineDataSet(entries, "PM2.5")
+            dataSet.color = Color.rgb(255, 165, 0)
+            dataSet.setCircleColor(Color.rgb(255, 165, 0))
+            dataSet.lineWidth = 2f
+            dataSet.circleRadius = 3f
+            dataSet.setDrawValues(false)
+            dataSets.add(dataSet)
+        }
+
+        // PM1 dataset
+        if (pm1Data.isNotEmpty()) {
+            val entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) ->
+                Entry(timestamp.toFloat(), value)
+            }
+            val dataSet = LineDataSet(entries, "PM1")
+            dataSet.color = Color.rgb(135, 206, 250)
+            dataSet.setCircleColor(Color.rgb(135, 206, 250))
+            dataSet.lineWidth = 2f
+            dataSet.circleRadius = 3f
+            dataSet.setDrawValues(false)
+            dataSets.add(dataSet)
+        }
+
+        val lineData = LineData(dataSets)
+        particleMatterChart.data = lineData
+        particleMatterChart.notifyDataSetChanged()
+        particleMatterChart.invalidate()
+
+        Log.d(TAG, "✓ Particle matter chart updated successfully")
     }
 
     private fun updateTempHumidityChart() {
@@ -419,30 +529,51 @@ class MainActivity : AppCompatActivity() {
         while (temperatureData.size > MAX_CHART_ENTRIES) temperatureData.removeAt(0)
         while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
-        lifecycleScope.launch {
-            // Only update if we have at least one data series (Vico doesn't allow empty series)
-            if (temperatureData.isEmpty() && humidityData.isEmpty()) {
-                Log.w(TAG, "⚠️ Temp/Humidity chart: No data to display")
-                return@launch
-            }
-
-            Log.d(TAG, "📊 Updating Temp/Humidity chart with Temp=${temperatureData.size}, Humidity=${humidityData.size} points")
-
-            tempHumidityModelProducer.runTransaction {
-                // Vico 2.x lineSeries for Temperature and Humidity
-                lineSeries {
-                    if (temperatureData.isNotEmpty()) {
-                        val sorted = temperatureData.sortedBy { it.first }
-                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                    }
-                    if (humidityData.isNotEmpty()) {
-                        val sorted = humidityData.sortedBy { it.first }
-                        series(sorted.map { it.first.toFloat() }, sorted.map { it.second })
-                    }
-                }
-            }
-            Log.d(TAG, "✓ Temp/Humidity chart updated successfully")
+        if (temperatureData.isEmpty() && humidityData.isEmpty()) {
+            Log.w(TAG, "⚠️ Temp/Humidity chart: No data to display")
+            tempHumidityChart.clear()
+            tempHumidityChart.invalidate()
+            return
         }
+
+        Log.d(TAG, "📊 Updating Temp/Humidity chart with Temp=${temperatureData.size}, Humidity=${humidityData.size} points")
+
+        val dataSets = mutableListOf<ILineDataSet>()
+
+        // Temperature dataset
+        if (temperatureData.isNotEmpty()) {
+            val entries = temperatureData.sortedBy { it.first }.map { (timestamp, value) ->
+                Entry(timestamp.toFloat(), value)
+            }
+            val dataSet = LineDataSet(entries, "Temperature (°C)")
+            dataSet.color = Color.rgb(255, 69, 0)
+            dataSet.setCircleColor(Color.rgb(255, 69, 0))
+            dataSet.lineWidth = 2f
+            dataSet.circleRadius = 3f
+            dataSet.setDrawValues(false)
+            dataSets.add(dataSet)
+        }
+
+        // Humidity dataset
+        if (humidityData.isNotEmpty()) {
+            val entries = humidityData.sortedBy { it.first }.map { (timestamp, value) ->
+                Entry(timestamp.toFloat(), value)
+            }
+            val dataSet = LineDataSet(entries, "Humidity (%)")
+            dataSet.color = Color.rgb(30, 144, 255)
+            dataSet.setCircleColor(Color.rgb(30, 144, 255))
+            dataSet.lineWidth = 2f
+            dataSet.circleRadius = 3f
+            dataSet.setDrawValues(false)
+            dataSets.add(dataSet)
+        }
+
+        val lineData = LineData(dataSets)
+        tempHumidityChart.data = lineData
+        tempHumidityChart.notifyDataSetChanged()
+        tempHumidityChart.invalidate()
+
+        Log.d(TAG, "✓ Temp/Humidity chart updated successfully")
     }
 
     private fun clearChartData() {

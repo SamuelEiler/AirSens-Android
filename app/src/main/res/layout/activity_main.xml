@@ -312,13 +312,10 @@
                     android:textColor="#2C3E50"
                     android:paddingBottom="8dp" />
 
-                <com.patrykandpatrick.vico.views.cartesian.CartesianChartView
+                <com.github.mikephil.charting.charts.BarChart
                     android:id="@+id/gasResistanceChart"
                     android:layout_width="match_parent"
-                    android:layout_height="200dp"
-                    app:layers="column"
-                    app:showStartAxis="true"
-                    app:showBottomAxis="true" />
+                    android:layout_height="200dp" />
 
             </LinearLayout>
 
@@ -343,13 +340,10 @@
                 android:elevation="2dp"
                 android:layout_marginBottom="8dp">
 
-                <com.patrykandpatrick.vico.views.cartesian.CartesianChartView
+                <com.github.mikephil.charting.charts.LineChart
                     android:id="@+id/particleMatterChart"
                     android:layout_width="match_parent"
-                    android:layout_height="250dp"
-                    app:layers="line"
-                    app:showStartAxis="true"
-                    app:showBottomAxis="true" />
+                    android:layout_height="250dp" />
 
             </LinearLayout>
 
@@ -374,13 +368,10 @@
                 android:elevation="2dp"
                 android:layout_marginBottom="8dp">
 
-                <com.patrykandpatrick.vico.views.cartesian.CartesianChartView
+                <com.github.mikephil.charting.charts.LineChart
                     android:id="@+id/tempHumidityChart"
                     android:layout_width="match_parent"
-                    android:layout_height="250dp"
-                    app:layers="line"
-                    app:showStartAxis="true"
-                    app:showBottomAxis="true" />
+                    android:layout_height="250dp" />
 
             </LinearLayout>
 
