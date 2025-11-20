@@ -621,6 +621,9 @@ class BleLiveConnectionService : Service() {
     }
 
     private suspend fun waitForDisconnection() {
+        // Create new latch for this disconnection wait
+        disconnectionLatch = CompletableDeferred()
+
         try {
             // Start connection health monitoring
             startConnectionHealthCheck()
@@ -635,23 +638,14 @@ class BleLiveConnectionService : Service() {
 
             disconnectionLatch = null
 
-            // CRITICAL: When using autoConnect, DON'T close GATT!
-            // Closing GATT releases the object and breaks auto-reconnection.
-            // Only disconnect to trigger the auto-reconnect process.
+            // CRITICAL: When using autoConnect, DON'T close OR disconnect GATT!
+            // Closing/disconnecting GATT breaks auto-reconnection.
+            // Android will automatically reconnect the GATT object when device is in range.
             if (useAutoConnect) {
-                Log.i(TAG, "AutoConnect mode: Disconnecting but NOT closing GATT (enables auto-reconnect)")
-                currentGatt?.let { gatt ->
-                    if (ActivityCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) == PackageManager.PERMISSION_GRANTED
-                    ) {
-                        gatt.disconnect()
-                        delay(100) // Brief delay to ensure disconnect is processed
-                    }
-                }
-                // DON'T set currentGatt = null in autoConnect mode!
-                // Android will use this GATT object to auto-reconnect
+                Log.i(TAG, "AutoConnect mode: Waiting for Android to auto-reconnect (not calling disconnect)")
+                // Do nothing - just wait for the next disconnect event
+                // Android handles reconnection automatically with the same GATT object
+                // DON'T set currentGatt = null - Android needs this object to reconnect
             } else {
                 // Direct connect mode: Clean up GATT completely
                 Log.d(TAG, "Direct connect mode: Disconnecting and closing GATT")
