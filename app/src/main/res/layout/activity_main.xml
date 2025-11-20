@@ -29,8 +29,39 @@
         android:gravity="center"
         android:padding="12dp"
         android:background="@android:color/white"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="8dp"
         android:elevation="2dp" />
+
+    <!-- BLE Debug Status -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#E3F2FD"
+        android:padding="8dp"
+        android:layout_marginBottom="16dp"
+        android:elevation="1dp">
+
+        <TextView
+            android:id="@+id/bleConnectionStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="BLE: Disconnected"
+            android:textSize="12sp"
+            android:textColor="#1976D2"
+            android:textStyle="bold"
+            android:gravity="center" />
+
+        <TextView
+            android:id="@+id/lastDataReceived"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Last data: Never"
+            android:textSize="11sp"
+            android:textColor="#1976D2"
+            android:gravity="center"
+            android:layout_marginTop="4dp" />
+    </LinearLayout>
 
     <!-- Data Display Container (always visible) -->
     <ScrollView

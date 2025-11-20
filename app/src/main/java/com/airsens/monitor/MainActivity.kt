@@ -36,6 +36,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dataContainer: ScrollView
     private lateinit var lastHourButton: Button
     private lateinit var allDataButton: Button
+    private lateinit var bleConnectionStatus: TextView
+    private lateinit var lastDataReceived: TextView
 
     // Data display views
     private lateinit var pm10Text: TextView
@@ -97,6 +99,8 @@ class MainActivity : AppCompatActivity() {
     private fun initializeViews() {
         statusText = findViewById(R.id.statusText)
         dataContainer = findViewById(R.id.dataContainer)
+        bleConnectionStatus = findViewById(R.id.bleConnectionStatus)
+        lastDataReceived = findViewById(R.id.lastDataReceived)
 
         // Measurement data views
         pm10Text = findViewById(R.id.pm10Text)
@@ -175,6 +179,25 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             database.measurementDao().getAllFlow().collect { measurements ->
                 if (measurements.isNotEmpty()) {
+                    // Update debug status
+                    runOnUiThread {
+                        bleConnectionStatus.text = "BLE: Connected & Receiving Data"
+                        bleConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+
+                        val latest = measurements.first()
+                        val now = System.currentTimeMillis()
+                        val dataAge = (now / 1000) - latest.timestamp
+
+                        lastDataReceived.text = when {
+                            dataAge < 5 -> "Last data: Just now"
+                            dataAge < 60 -> "Last data: ${dataAge}s ago"
+                            dataAge < 3600 -> "Last data: ${dataAge / 60}m ago"
+                            else -> "Last data: ${dataAge / 3600}h ago"
+                        }
+
+                        Log.d(TAG, "📊 Data received! PM10=${latest.pm10}, Age=${dataAge}s")
+                    }
+
                     // Update UI with latest data
                     updateUIWithMeasurements(measurements.take(MAX_CHART_ENTRIES))
                 }
