@@ -270,21 +270,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // By default, show all data
-        showAllChartData()
-
         // Log chart data counts
         Log.d(TAG, "📈 Chart data loaded: Gas=${fullGasResistanceData.size}, " +
                 "PM10=${fullPm10Data.size}, PM2.5=${fullPm25Data.size}, " +
                 "Temp=${fullTemperatureData.size}, Humidity=${fullHumidityData.size}")
 
-        // Update charts on UI thread
+        // By default, show all data (this updates the charts)
+        showAllChartData()
+
+        // Update UI text displays on UI thread
         runOnUiThread {
             try {
-                updateGasResistanceChart()
-                updateParticleMatterChart()
-                updateTempHumidityChart()
-
                 // Display the latest measurement data
                 val latest = measurements.first()
                 val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
