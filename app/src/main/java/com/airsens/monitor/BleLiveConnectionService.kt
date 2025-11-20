@@ -235,9 +235,25 @@ class BleLiveConnectionService : Service() {
                 if (connectedDevice != null && useAutoConnect) {
                     // We've connected before - use autoConnect for automatic reconnection
                     Log.i(TAG, "Using autoConnect mode for known device: ${connectedDevice!!.address}")
-                    reconnectToKnownDevice()
-                    // autoConnect never times out - wait here until shouldReconnect becomes false
-                    waitForDisconnection()
+
+                    // Call reconnectToKnownDevice() only once to create the autoConnect GATT
+                    val gatt = reconnectToKnownDevice()
+                    if (gatt != null) {
+                        Log.i(TAG, "AutoConnect GATT established - will reconnect automatically on disconnect")
+
+                        // Loop: Just wait for disconnects - Android auto-reconnects with same GATT
+                        while (shouldReconnect && isRunning && useAutoConnect) {
+                            waitForDisconnection()
+                            Log.i(TAG, "AutoConnect: Disconnected, waiting for automatic reconnection...")
+                            updateNotification("Disconnected, auto-reconnecting...")
+                        }
+                    } else {
+                        // AutoConnect failed - retry
+                        Log.w(TAG, "AutoConnect failed, will retry")
+                        useAutoConnect = false
+                        connectedDevice = null
+                        delay(RECONNECT_DELAY)
+                    }
                 } else {
                     // First connection - use fast direct connect
                     updateNotification("Scanning for device...")
@@ -294,9 +310,10 @@ class BleLiveConnectionService : Service() {
     /**
      * Reconnect to known device using autoConnect=true (industry standard for wearables)
      * This enables automatic reconnection that survives disconnects and never times out
+     * Returns the GATT object if successful, null otherwise
      */
-    private suspend fun reconnectToKnownDevice() {
-        val device = connectedDevice ?: return
+    private suspend fun reconnectToKnownDevice(): BluetoothGatt? {
+        val device = connectedDevice ?: return null
 
         Log.i(TAG, "Reconnecting with autoConnect=true (no timeout, auto-reconnect forever)")
         updateNotification("Auto-reconnecting...")
@@ -307,10 +324,10 @@ class BleLiveConnectionService : Service() {
 
         if (gatt != null) {
             Log.i(TAG, "AutoConnect initiated - will reconnect automatically")
+            return gatt
         } else {
             Log.w(TAG, "Failed to initiate autoConnect")
-            useAutoConnect = false  // Fall back to scan+connect
-            connectedDevice = null
+            return null
         }
     }
 
@@ -407,10 +424,17 @@ class BleLiveConnectionService : Service() {
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         Log.w(TAG, "BLE disconnected (status=$status)")
 
-                        // If we disconnect before service discovery completes, cancel the connection attempt
+                        // Handle disconnection based on connection mode
                         if (continuation.isActive) {
-                            Log.w(TAG, "Disconnected during connection/discovery - cancelling connection attempt")
-                            continuation.cancel()
+                            if (autoConnect) {
+                                // With autoConnect, Android will automatically reconnect
+                                // Don't cancel - let it keep trying in the background
+                                Log.i(TAG, "AutoConnect mode: Disconnect detected, will auto-reconnect when device available")
+                            } else {
+                                // Direct connect mode: Disconnect before service discovery = failed connection
+                                Log.w(TAG, "Direct connect mode: Disconnected during connection/discovery - cancelling attempt")
+                                continuation.cancel()
+                            }
                         }
 
                         // Complete the latch to signal disconnection
