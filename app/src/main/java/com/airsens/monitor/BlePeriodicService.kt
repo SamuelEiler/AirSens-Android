@@ -36,83 +36,108 @@ class BulkDataParser {
     private val TAG = "BulkDataParser"
 
     /**
-     * Parse a 20-byte packet containing a complete measurement record
+     * Parse a packet containing a complete measurement record
      * @return Pair of (recordIndex, totalRecords) or null if parse error
      */
     fun parsePacket(data: ByteArray): Pair<Int, Int>? {
-        if (data.size != 20) {
-            Log.e(TAG, "Invalid packet size: ${data.size} bytes (expected exactly 20)")
+        if (data.size < 4) {
+            Log.e(TAG, "Packet too small: ${data.size} bytes (need at least 4 for header)")
             return null
         }
 
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Packet structure for measurement_record_t:
-            // [0-1]: record_index (uint16_t)
-            // [2-3]: total_records (uint16_t) - only in first packet
-            // [4-7]: timestamp (uint32_t)
-            // [8-11]: pm10 (float)
-            // [12-15]: pm25 (float)
-            // [16-19]: pm1 (float)
-            // [20-23]: flags (uint8_t obstructed, uint8_t timeValid, uint16_t reserved)
-            // [24-27]: temperature (float)
-            // [28-31]: humidity (float)
-            // [32-35]: pressure (float)
-            // [36-39]: iaq (float)
-            // [40-43]: gasResistance (float)
-            // [44]: iaqAccuracy (uint8_t)
-            // [45-47]: reserved
-
             val recordIndex = buffer.getShort(0).toInt() and 0xFFFF
             val totalRecords = buffer.getShort(2).toInt() and 0xFFFF
 
-            Log.d(TAG, "Parsing record $recordIndex/$totalRecords")
+            Log.d(TAG, "Parsing record $recordIndex/$totalRecords (packet size: ${data.size} bytes)")
 
             return Pair(recordIndex, totalRecords)
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing packet", e)
+            Log.e(TAG, "Error parsing packet header", e)
             return null
         }
     }
 
     /**
-     * Parse a complete measurement from a single 20-byte packet
+     * Parse a complete measurement from a packet
+     * Handles variable packet sizes - extracts available data
      */
     fun parseMeasurement(data: ByteArray): AirQualitySensorClient.MeasurementData? {
-        if (data.size != 20) {
-            Log.e(TAG, "Invalid packet size: ${data.size} bytes (expected exactly 20)")
+        if (data.size < 20) {
+            Log.e(TAG, "Packet too small: ${data.size} bytes (need at least 20 for core PM data)")
             return null
         }
 
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Skip record_index and total_records
+            // Core measurement fields at fixed offsets
+            // [4-7]: timestamp (uint32_t)
+            // [8-11]: pm10 (float)
+            // [12-15]: pm25 (float)
+            // [16-19]: pm1 (float)
             val timestamp = buffer.getInt(4).toLong() and 0xFFFFFFFFL
             val pm10 = buffer.getFloat(8)
             val pm25 = buffer.getFloat(12)
             val pm1 = buffer.getFloat(16)
 
-            // The rest of the data would be in bytes 20+, but this simplified format
-            // only sends the core PM data in the first 20 bytes per the new protocol
-            // Environmental data may be in a separate notification or handled differently
+            // Optional fields if packet is larger
+            var obstructed = false
+            var timeValid = true
+            var temperature: Float? = null
+            var humidity: Float? = null
+            var pressure: Float? = null
+            var iaq: Float? = null
+            var gasResistance: Float? = null
+            var iaqAccuracy = 0
 
-            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10")
+            // Try to extract optional fields if they're in the packet
+            if (data.size >= 24) {
+                try {
+                    obstructed = buffer.get(20).toInt() != 0
+                    timeValid = buffer.get(21).toInt() != 0
+                    iaqAccuracy = buffer.get(22).toInt() and 0xFF
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not parse flags from packet")
+                }
+            }
+
+            if (data.size >= 40) {
+                try {
+                    temperature = buffer.getFloat(24)
+                    humidity = buffer.getFloat(28)
+                    pressure = buffer.getFloat(32)
+                    iaq = buffer.getFloat(36)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not parse environmental data from packet")
+                }
+            }
+
+            if (data.size >= 44) {
+                try {
+                    gasResistance = buffer.getFloat(40)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not parse gas resistance from packet")
+                }
+            }
+
+            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10 (${data.size} bytes)")
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
                 pm1 = pm1,
                 pm25 = pm25,
                 pm10 = pm10,
-                obstructed = false,
-                timeValid = true,
-                temperature = null,
-                humidity = null,
-                pressure = null,
-                iaq = null,
-                gasResistance = null,
-                iaqAccuracy = 0
+                obstructed = obstructed,
+                timeValid = timeValid,
+                temperature = temperature,
+                humidity = humidity,
+                pressure = pressure,
+                iaq = iaq,
+                gasResistance = gasResistance,
+                iaqAccuracy = iaqAccuracy
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing measurement", e)
