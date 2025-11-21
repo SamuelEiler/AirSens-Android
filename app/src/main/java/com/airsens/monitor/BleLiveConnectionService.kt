@@ -83,6 +83,7 @@ class BleLiveConnectionService : Service() {
     private var expectedTotalRecords = 0
     private var receivedRecordCount = 0
     private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
+    private val seenMeasurementTimestamps = mutableSetOf<Long>()  // Track seen measurements to avoid duplicates
 
     // Connection health monitoring
     private var lastDataReceivedTime = 0L
@@ -1140,12 +1141,20 @@ class BleLiveConnectionService : Service() {
             expectedTotalRecords = totalRecords
             receivedRecordCount = 0
             accumulatedMeasurements.clear()
+            seenMeasurementTimestamps.clear()
             Log.i(TAG, "Starting bulk transfer: $totalRecords records")
         }
 
         // Parse the complete measurement from this single packet
         val measurement = bulkDataParser.parseMeasurement(data)
         if (measurement != null) {
+            // Skip if we've already seen this measurement (handles reconnection duplicates)
+            if (seenMeasurementTimestamps.contains(measurement.timestamp)) {
+                Log.w(TAG, "Skipping duplicate measurement with timestamp ${measurement.timestamp}")
+                return
+            }
+
+            seenMeasurementTimestamps.add(measurement.timestamp)
             receivedRecordCount++
             accumulatedMeasurements.add(measurement)
             Log.d(TAG, "Received measurement $receivedRecordCount/$expectedTotalRecords")
