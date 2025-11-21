@@ -51,6 +51,12 @@ class BulkDataParser {
             val recordIndex = buffer.getShort(0).toInt() and 0xFFFF
             val totalRecords = buffer.getShort(2).toInt() and 0xFFFF
 
+            // Log raw hex for first packet to debug byte layout
+            if (recordIndex == 0) {
+                val hexString = data.take(20).joinToString(" ") { "%02X".format(it) }
+                Log.d(TAG, "First packet raw hex (first 20 bytes): $hexString")
+            }
+
             Log.d(TAG, "Parsing record $recordIndex/$totalRecords (packet size: ${data.size} bytes)")
 
             return Pair(recordIndex, totalRecords)
