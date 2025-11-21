@@ -106,7 +106,7 @@ class BulkDataParser {
             val iaq = buffer.getFloat(32)
             val gasResistance = buffer.getFloat(36)
 
-            // Parse gas profile data if packet is large enough (69 bytes)
+            // Parse gas profile data if packet is large enough
             var gasResistanceProfile = 0
             var gasResistanceArray: IntArray? = null
 
@@ -117,9 +117,18 @@ class BulkDataParser {
                 if (gasResistanceProfile > 0 && data.size >= 62) {
                     try {
                         gasResistanceArray = IntArray(10)
+
+                        // Debug: log hex of array region
+                        val arrayHex = data.sliceArray(42 until minOf(62, data.size))
+                            .joinToString(" ") { "%02X".format(it) }
+                        Log.d(TAG, "Gas array raw hex (bytes 42-61): $arrayHex")
+
                         for (i in 0 until 10) {
                             val offset = 42 + (i * 2)
-                            gasResistanceArray[i] = buffer.getShort(offset).toInt()
+                            if (offset + 1 < data.size) {
+                                gasResistanceArray[i] = buffer.getShort(offset).toInt()
+                                Log.d(TAG, "  Array[$i] offset=$offset: ${gasResistanceArray[i]}")
+                            }
                         }
                         Log.d(TAG, "Parsed gas profile #$gasResistanceProfile with 10 resistance values")
                     } catch (e: Exception) {
