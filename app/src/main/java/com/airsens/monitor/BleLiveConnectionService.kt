@@ -80,7 +80,8 @@ class BleLiveConnectionService : Service() {
 
     // Bulk data sync state
     private val bulkDataParser = BulkDataParser()
-    private var expectedTotalPackets = 0
+    private var expectedTotalRecords = 0
+    private var receivedRecordCount = 0
     private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
 
     // Connection health monitoring
@@ -480,12 +481,12 @@ class BleLiveConnectionService : Service() {
                             Log.w(TAG, "Failed to enable TIME_REQUEST indications, but continuing anyway")
                         }
 
-                        // Step 2: Send initial time sync (wait for TIME_REQUEST to complete)
-                        delay(500)
+                        // Step 2: Send initial time sync (wait longer for GATT queue to clear after CCCD write)
+                        delay(1500)
                         sendTimeSync(gatt)
 
                         // Step 3: Subscribe to live MEASUREMENT notifications (wait longer for GATT queue to clear)
-                        delay(1000)
+                        delay(2000)
                         val measurementSuccess = enableMeasurementNotifications(gatt)
                         if (!measurementSuccess) {
                             Log.e(TAG, "✗ Failed to subscribe to MEASUREMENT notifications")
@@ -498,7 +499,7 @@ class BleLiveConnectionService : Service() {
                         Log.i(TAG, "✓ Subscribed to live MEASUREMENT notifications")
 
                         // Step 4: Subscribe to DATA_RESPONSE notifications (wait for MEASUREMENT to complete)
-                        delay(500)
+                        delay(1500)
                         val dataResponseSuccess = enableDataResponseNotifications(gatt)
                         if (!dataResponseSuccess) {
                             Log.e(TAG, "✗ Failed to subscribe to DATA_RESPONSE notifications")
@@ -1120,7 +1121,8 @@ class BleLiveConnectionService : Service() {
 
     /**
      * Handle bulk data packet received via DATA_RESPONSE notification
-     * Uses 3-packet format parser
+     * Simplified format: Each notification = one complete measurement record (20 bytes)
+     * No reassembly needed
      */
     private fun handleBulkDataPacket(data: ByteArray, gatt: BluetoothGatt) {
         // Update connection health timestamp
@@ -1131,29 +1133,29 @@ class BleLiveConnectionService : Service() {
             return
         }
 
-        val (packetIndex, totalPackets) = parsed
+        val (recordIndex, totalRecords) = parsed
 
-        // Initialize on first packet
-        if (packetIndex == 0 && totalPackets > 0) {
-            expectedTotalPackets = totalPackets
+        // Initialize on first record
+        if (recordIndex == 0 && totalRecords > 0) {
+            expectedTotalRecords = totalRecords
+            receivedRecordCount = 0
             accumulatedMeasurements.clear()
-            Log.i(TAG, "Starting bulk transfer: $totalPackets packets")
+            Log.i(TAG, "Starting bulk transfer: $totalRecords records")
         }
 
-        // Check for completed measurements after each packet
-        val completedMeasurements = bulkDataParser.getCompletedMeasurements()
-        if (completedMeasurements.isNotEmpty()) {
-            Log.d(TAG, "Completed measurements: ${accumulatedMeasurements.size + completedMeasurements.size}")
-            accumulatedMeasurements.addAll(completedMeasurements)
+        // Parse the complete measurement from this single packet
+        val measurement = bulkDataParser.parseMeasurement(data)
+        if (measurement != null) {
+            receivedRecordCount++
+            accumulatedMeasurements.add(measurement)
+            Log.d(TAG, "Received measurement $receivedRecordCount/$expectedTotalRecords")
+        } else {
+            Log.e(TAG, "Failed to parse measurement from packet")
         }
 
         // Check if transfer is complete
-        if (expectedTotalPackets > 0 && packetIndex + 1 >= expectedTotalPackets) {
+        if (expectedTotalRecords > 0 && receivedRecordCount >= expectedTotalRecords) {
             Log.i(TAG, "Transfer complete: ${accumulatedMeasurements.size} measurements")
-
-            // Get any remaining completed measurements
-            val finalMeasurements = bulkDataParser.getCompletedMeasurements()
-            accumulatedMeasurements.addAll(finalMeasurements)
 
             // Save to database
             serviceScope.launch {
@@ -1163,7 +1165,8 @@ class BleLiveConnectionService : Service() {
             // Reset for next transfer
             bulkDataParser.reset()
             accumulatedMeasurements.clear()
-            expectedTotalPackets = 0
+            expectedTotalRecords = 0
+            receivedRecordCount = 0
         }
     }
 

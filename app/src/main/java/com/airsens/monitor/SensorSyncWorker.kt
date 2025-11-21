@@ -51,7 +51,8 @@ class SensorSyncWorker(
     private lateinit var database: AppDatabase
     private var currentGatt: BluetoothGatt? = null
     private val bulkDataParser = BulkDataParser()
-    private var expectedTotalPackets = 0
+    private var expectedTotalRecords = 0
+    private var receivedRecordCount = 0
     private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -393,23 +394,26 @@ class SensorSyncWorker(
 
     private fun handleDataPacket(data: ByteArray) {
         val parsed = bulkDataParser.parsePacket(data) ?: return
-        val (packetIndex, totalPackets) = parsed
+        val (recordIndex, totalRecords) = parsed
 
-        if (packetIndex == 0 && totalPackets > 0) {
-            expectedTotalPackets = totalPackets
+        if (recordIndex == 0 && totalRecords > 0) {
+            expectedTotalRecords = totalRecords
+            receivedRecordCount = 0
             accumulatedMeasurements.clear()
-            Log.i(TAG, "Starting transfer: $totalPackets packets")
+            Log.i(TAG, "Starting transfer: $totalRecords records")
         }
 
-        val completed = bulkDataParser.getCompletedMeasurements()
-        if (completed.isNotEmpty()) {
-            accumulatedMeasurements.addAll(completed)
-            Log.d(TAG, "Completed measurements: ${accumulatedMeasurements.size}")
+        // Parse the complete measurement from this single packet
+        val measurement = bulkDataParser.parseMeasurement(data)
+        if (measurement != null) {
+            receivedRecordCount++
+            accumulatedMeasurements.add(measurement)
+            Log.d(TAG, "Received measurement $receivedRecordCount/$expectedTotalRecords")
+        } else {
+            Log.e(TAG, "Failed to parse measurement from packet")
         }
 
-        if (expectedTotalPackets > 0 && packetIndex + 1 >= expectedTotalPackets) {
-            val final = bulkDataParser.getCompletedMeasurements()
-            accumulatedMeasurements.addAll(final)
+        if (expectedTotalRecords > 0 && receivedRecordCount >= expectedTotalRecords) {
             Log.i(TAG, "Transfer complete: ${accumulatedMeasurements.size} measurements")
             bulkDataParser.reset()
         }

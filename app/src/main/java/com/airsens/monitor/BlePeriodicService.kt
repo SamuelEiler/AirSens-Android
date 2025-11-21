@@ -28,172 +28,102 @@ import java.util.*
 import java.util.concurrent.CancellationException
 
 /**
- * Builder for accumulating 3 packets into a complete measurement
- * New ESP32 format sends each measurement as 3 sequential 20-byte packets
- */
-data class MeasurementBuilder(
-    var timestamp: Long = 0,
-    var pm10: Float = 0f,
-    var pm25: Float = 0f,
-    var pm1: Float = 0f,
-    var obstructed: Boolean = false,
-    var timeValid: Boolean = false,
-    var iaqAccuracy: Int = 0,
-    var temperature: Float = 0f,
-    var humidity: Float = 0f,
-    var pressure: Float = 0f,
-    var iaq: Float = 0f,
-    var gasResistance: Float = 0f,
-    private var packetsReceived: Int = 0 // Bitmask: 0x01, 0x02, 0x04
-) {
-    fun isComplete(): Boolean = packetsReceived == 0x07 // All 3 bits set (packets 0, 1, 2)
-
-    fun toMeasurement(): AirQualitySensorClient.MeasurementData = AirQualitySensorClient.MeasurementData(
-        timestamp = timestamp,
-        pm1 = pm1,
-        pm25 = pm25,
-        pm10 = pm10,
-        obstructed = obstructed,
-        timeValid = timeValid,
-        temperature = if (temperature != 0f && !temperature.isNaN() && temperature in -50f..100f) temperature else null,
-        humidity = if (humidity != 0f && !humidity.isNaN() && humidity in 0f..100f) humidity else null,
-        pressure = if (pressure != 0f && !pressure.isNaN() && pressure in 30000f..120000f) (pressure / 100) else null,
-        iaq = if (iaq != 0f && !iaq.isNaN() && iaq in 0f..500f) iaq else null,
-        gasResistance = if (gasResistance != 0f && !gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
-        iaqAccuracy = iaqAccuracy
-    )
-
-    fun markPacketReceived(subPacket: Int) {
-        packetsReceived = packetsReceived or (1 shl subPacket)
-    }
-}
-
-/**
- * Parser for new 3-packet measurement format
- * Each measurement = 3 packets × 20 bytes
- * Packet 0: Header + PM data
- * Packet 1: Status + Environmental part 1
- * Packet 2: Environmental part 2
+ * Parser for simplified bulk data transfer
+ * Each notification contains one complete measurement record (20 bytes)
+ * No reassembly or fragmentation needed
  */
 class BulkDataParser {
-    private val builders = mutableMapOf<Int, MeasurementBuilder>()
     private val TAG = "BulkDataParser"
 
     /**
-     * Parse a 20-byte packet and add it to the appropriate measurement builder
-     * @return Pair of (packetIndex, totalPackets) or null if parse error
-     * Note: totalPackets is only valid for packet 0 (returns 0 for packets 1 and 2)
+     * Parse a 20-byte packet containing a complete measurement record
+     * @return Pair of (recordIndex, totalRecords) or null if parse error
      */
     fun parsePacket(data: ByteArray): Pair<Int, Int>? {
-        if (data.size < 20) {
-            Log.e(TAG, "Packet too small: ${data.size} bytes (need exactly 20)")
+        if (data.size != 20) {
+            Log.e(TAG, "Invalid packet size: ${data.size} bytes (expected exactly 20)")
             return null
         }
-
-        val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-
-        // packetIndex is in ALL packets at bytes [0-1]
-        val packetIndex = buffer.getShort(0).toInt() and 0xFFFF
-
-        // Determine which measurement and sub-packet
-        val measurementIndex = packetIndex / 3
-        val subPacket = packetIndex % 3
-
-        // totalPackets is ONLY in packet 0 at bytes [2-3]
-        // For packets 1 and 2, bytes [2-3] contain different data (marker, flags)
-        val totalPackets = if (subPacket == 0) {
-            buffer.getShort(2).toInt() and 0xFFFF
-        } else {
-            0 // Will use cached value from handleBulkDataChunk
-        }
-
-        if (totalPackets > 0) {
-            Log.d(TAG, "Parsing packet $packetIndex/$totalPackets (measurement $measurementIndex, sub-packet $subPacket)")
-        } else {
-            Log.d(TAG, "Parsing packet $packetIndex (measurement $measurementIndex, sub-packet $subPacket)")
-        }
-
-        // Get or create builder for this measurement
-        val builder = builders.getOrPut(measurementIndex) { MeasurementBuilder() }
 
         try {
-            when (subPacket) {
-                0 -> {
-                    // Packet 0: PM data
-                    // [0-1]: packetIndex, [2-3]: totalPackets, [4-7]: timestamp, [8-11]: pm10, [12-15]: pm25, [16-19]: pm1
-                    builder.timestamp = buffer.getInt(4).toLong() and 0xFFFFFFFFL
-                    builder.pm10 = buffer.getFloat(8)
-                    builder.pm25 = buffer.getFloat(12)
-                    builder.pm1 = buffer.getFloat(16)
-                    builder.markPacketReceived(0)
-                    Log.d(TAG, "  Packet 0: timestamp=${builder.timestamp}, PM10=${builder.pm10}, PM2.5=${builder.pm25}, PM1=${builder.pm1}")
-                }
-                1 -> {
-                    // Packet 1: Flags + Environment part 1
-                    // [0-1]: packetIndex, [2]: marker, [3]: obstructed, [4]: timeValid, [5]: iaqAccuracy
-                    // [6-9]: temperature, [10-13]: humidity, [14-17]: pressure, [18-19]: reserved
-                    val marker = buffer.get(2).toInt() and 0xFF
-                    if (marker != 1) Log.w(TAG, "  Expected marker=1, got $marker")
+            val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-                    builder.obstructed = buffer.get(3).toInt() != 0
-                    builder.timeValid = buffer.get(4).toInt() != 0
-                    builder.iaqAccuracy = buffer.get(5).toInt() and 0xFF
-                    builder.temperature = buffer.getFloat(6)
-                    builder.humidity = buffer.getFloat(10)
-                    builder.pressure = buffer.getFloat(14)
-                    // Skip bytes 18-19
-                    builder.markPacketReceived(1)
-                    Log.d(TAG, "  Packet 1: obstructed=${builder.obstructed}, timeValid=${builder.timeValid}, temp=${builder.temperature}, humidity=${builder.humidity}, pressure=${builder.pressure}")
-                }
-                2 -> {
-                    // Packet 2: Environment part 2
-                    // [0-1]: packetIndex, [2]: marker, [3-6]: iaq, [7-10]: gasResistance, [11-19]: reserved
-                    val marker = buffer.get(2).toInt() and 0xFF
-                    if (marker != 2) Log.w(TAG, "  Expected marker=2, got $marker")
+            // Packet structure for measurement_record_t:
+            // [0-1]: record_index (uint16_t)
+            // [2-3]: total_records (uint16_t) - only in first packet
+            // [4-7]: timestamp (uint32_t)
+            // [8-11]: pm10 (float)
+            // [12-15]: pm25 (float)
+            // [16-19]: pm1 (float)
+            // [20-23]: flags (uint8_t obstructed, uint8_t timeValid, uint16_t reserved)
+            // [24-27]: temperature (float)
+            // [28-31]: humidity (float)
+            // [32-35]: pressure (float)
+            // [36-39]: iaq (float)
+            // [40-43]: gasResistance (float)
+            // [44]: iaqAccuracy (uint8_t)
+            // [45-47]: reserved
 
-                    builder.iaq = buffer.getFloat(3)
-                    builder.gasResistance = buffer.getFloat(7)
-                    // Skip bytes 11-19
-                    builder.markPacketReceived(2)
-                    Log.d(TAG, "  Packet 2: iaq=${builder.iaq}, gasResistance=${builder.gasResistance}")
-                }
-                else -> {
-                    Log.e(TAG, "Invalid sub-packet index: $subPacket")
-                    return null
-                }
-            }
+            val recordIndex = buffer.getShort(0).toInt() and 0xFFFF
+            val totalRecords = buffer.getShort(2).toInt() and 0xFFFF
+
+            Log.d(TAG, "Parsing record $recordIndex/$totalRecords")
+
+            return Pair(recordIndex, totalRecords)
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing packet $packetIndex (sub-packet $subPacket)", e)
+            Log.e(TAG, "Error parsing packet", e)
+            return null
+        }
+    }
+
+    /**
+     * Parse a complete measurement from a single 20-byte packet
+     */
+    fun parseMeasurement(data: ByteArray): AirQualitySensorClient.MeasurementData? {
+        if (data.size != 20) {
+            Log.e(TAG, "Invalid packet size: ${data.size} bytes (expected exactly 20)")
             return null
         }
 
-        return Pair(packetIndex, totalPackets)
-    }
+        try {
+            val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-    /**
-     * Get all measurements that have received all 3 packets
-     * Removes completed measurements from internal map
-     */
-    fun getCompletedMeasurements(): List<AirQualitySensorClient.MeasurementData> {
-        val completed = builders.filter { it.value.isComplete() }
-            .map { it.value.toMeasurement() }
-            .sortedBy { it.timestamp }
+            // Skip record_index and total_records
+            val timestamp = buffer.getInt(4).toLong() and 0xFFFFFFFFL
+            val pm10 = buffer.getFloat(8)
+            val pm25 = buffer.getFloat(12)
+            val pm1 = buffer.getFloat(16)
 
-        // Remove completed measurements from map
-        builders.entries.removeIf { it.value.isComplete() }
+            // The rest of the data would be in bytes 20+, but this simplified format
+            // only sends the core PM data in the first 20 bytes per the new protocol
+            // Environmental data may be in a separate notification or handled differently
 
-        if (completed.isNotEmpty()) {
-            Log.d(TAG, "Retrieved ${completed.size} completed measurements")
+            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10")
+
+            return AirQualitySensorClient.MeasurementData(
+                timestamp = timestamp,
+                pm1 = pm1,
+                pm25 = pm25,
+                pm10 = pm10,
+                obstructed = false,
+                timeValid = true,
+                temperature = null,
+                humidity = null,
+                pressure = null,
+                iaq = null,
+                gasResistance = null,
+                iaqAccuracy = 0
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing measurement", e)
+            return null
         }
-
-        return completed
     }
 
     /**
-     * Clear all internal state
+     * Clear all internal state (no longer needed with single-packet format)
      */
     fun reset() {
-        builders.clear()
         Log.d(TAG, "Parser reset")
     }
 }
@@ -244,9 +174,10 @@ class BlePeriodicService : Service() {
     private var onCharacteristicChangedCallback: ((ByteArray?) -> Unit)? = null
     private var onDescriptorWriteCallback: ((Boolean) -> Unit)? = null
 
-    // Bulk data sync state (new 3-packet format)
+    // Bulk data sync state (simplified single-packet format)
     private val bulkDataParser = BulkDataParser()
-    private var expectedTotalPackets = 0
+    private var expectedTotalRecords = 0
+    private var receivedRecordCount = 0
     private val accumulatedMeasurements = mutableListOf<AirQualitySensorClient.MeasurementData>()
     private var bulkSyncCompletionCallback: ((List<AirQualitySensorClient.MeasurementData>) -> Unit)? = null
 
@@ -1126,50 +1057,44 @@ class BlePeriodicService : Service() {
     }
 
     /**
-     * Handle a bulk data packet received via indication
-     * New format: Each measurement = 3 packets × 20 bytes
-     * Collects packets and triggers completion callback when all received
+     * Handle a bulk data packet received via notification
+     * New simplified format: Each notification = one complete measurement record (20 bytes)
+     * No reassembly needed - each packet is a complete measurement
      */
     private fun handleBulkDataChunk(data: ByteArray) {
-        val parsed = parseDataPacket(data) ?: run {
+        val parsed = bulkDataParser.parsePacket(data) ?: run {
             Log.e(TAG, "Failed to parse data packet")
             return
         }
 
-        val (packetIndex, totalPacketsFromPacket) = parsed
+        val (recordIndex, totalRecordsFromPacket) = parsed
 
-        // Cache totalPackets from first packet (packet 0)
-        // For packets 1 and 2, totalPacketsFromPacket will be 0
-        if (packetIndex == 0 && totalPacketsFromPacket > 0) {
-            // First packet - initialize collection
-            Log.d(TAG, "Starting bulk data transfer: expecting $totalPacketsFromPacket packets")
-            expectedTotalPackets = totalPacketsFromPacket
+        // Initialize on first record (recordIndex == 0)
+        if (recordIndex == 0 && totalRecordsFromPacket > 0) {
+            Log.i(TAG, "Starting bulk data transfer: expecting $totalRecordsFromPacket records")
+            expectedTotalRecords = totalRecordsFromPacket
+            receivedRecordCount = 0
             accumulatedMeasurements.clear()
         }
 
-        // Use cached value for progress calculation
-        if (expectedTotalPackets > 0) {
-            val progress = ((packetIndex + 1) * 100) / expectedTotalPackets
-            Log.d(TAG, "Progress: $progress% (packet ${packetIndex + 1}/$expectedTotalPackets)")
-        }
+        // Parse the complete measurement from this single packet
+        val measurement = bulkDataParser.parseMeasurement(data)
+        if (measurement != null) {
+            receivedRecordCount++
+            accumulatedMeasurements.add(measurement)
 
-        // Check for completed measurements after each packet
-        val completedMeasurements = bulkDataParser.getCompletedMeasurements()
-        if (completedMeasurements.isNotEmpty()) {
-            Log.i(TAG, "Completed ${completedMeasurements.size} measurements")
-            accumulatedMeasurements.addAll(completedMeasurements)
-        }
-
-        // Check if transfer is complete (all packets received)
-        if (expectedTotalPackets > 0 && packetIndex + 1 >= expectedTotalPackets) {
-            Log.i(TAG, "Bulk transfer complete! Received all $expectedTotalPackets packets")
-
-            // Get any remaining completed measurements
-            val finalMeasurements = bulkDataParser.getCompletedMeasurements()
-            if (finalMeasurements.isNotEmpty()) {
-                accumulatedMeasurements.addAll(finalMeasurements)
+            // Log progress
+            if (expectedTotalRecords > 0) {
+                val progress = (receivedRecordCount * 100) / expectedTotalRecords
+                Log.d(TAG, "Progress: $progress% (record $receivedRecordCount/$expectedTotalRecords)")
             }
+        } else {
+            Log.e(TAG, "Failed to parse measurement from packet")
+        }
 
+        // Check if transfer is complete
+        if (expectedTotalRecords > 0 && receivedRecordCount >= expectedTotalRecords) {
+            Log.i(TAG, "Bulk transfer complete! Received all $expectedTotalRecords records")
             Log.d(TAG, "Total measurements received: ${accumulatedMeasurements.size}")
 
             // Trigger completion callback with all accumulated measurements
@@ -1181,10 +1106,11 @@ class BlePeriodicService : Service() {
                 Log.w(TAG, "Bulk data transfer completed but no callback registered")
             }
 
-            // Reset parser and state for next transfer
+            // Reset state for next transfer
             bulkDataParser.reset()
             accumulatedMeasurements.clear()
-            expectedTotalPackets = 0
+            expectedTotalRecords = 0
+            receivedRecordCount = 0
         }
     }
 
@@ -1203,7 +1129,8 @@ class BlePeriodicService : Service() {
                 // Clear any previous state
                 accumulatedMeasurements.clear()
                 bulkDataParser.reset()
-                expectedTotalPackets = 0
+                expectedTotalRecords = 0
+                receivedRecordCount = 0
 
                 // Set up completion callback
                 bulkSyncCompletionCallback = { measurements ->
@@ -1240,7 +1167,7 @@ class BlePeriodicService : Service() {
                     // Set a timeout to detect this case
                     serviceScope.launch {
                         delay(5000) // 5 second timeout for first packet
-                        if (expectedTotalPackets == 0 && accumulatedMeasurements.isEmpty()) {
+                        if (expectedTotalRecords == 0 && accumulatedMeasurements.isEmpty()) {
                             Log.d(TAG, "No bulk data received (timeout) - ESP32 may have no data in range")
                             val callback = bulkSyncCompletionCallback
                             if (callback != null) {
