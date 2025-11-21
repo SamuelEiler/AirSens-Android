@@ -128,8 +128,21 @@ class BulkDataParser {
                 }
             }
 
-            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10, temp=$temperature°C" +
-                (if (gasResistanceProfile > 0) ", profile=$gasResistanceProfile" else ""))
+            // Log all fields for debugging
+            Log.d(TAG, "=== MEASUREMENT DATA ===")
+            Log.d(TAG, "Timestamp: $timestamp")
+            Log.d(TAG, "PM1: $pm1 µg/m³, PM2.5: $pm25 µg/m³, PM10: $pm10 µg/m³")
+            Log.d(TAG, "Temperature: $temperature°C, Humidity: $humidity%, Pressure: $pressure Pa")
+            Log.d(TAG, "IAQ: $iaq, Gas Resistance: $gasResistance Ω")
+            Log.d(TAG, "Obstructed: $obstructed, Time Valid: $timeValid, IAQ Accuracy: $iaqAccuracy")
+            if (gasResistanceProfile > 0) {
+                Log.d(TAG, "Gas Profile #$gasResistanceProfile:")
+                val heaterTemps = intArrayOf(150, 170, 190, 210, 250, 280, 310, 330, 350, 340)
+                gasResistanceArray?.forEachIndexed { index, value ->
+                    Log.d(TAG, "  ${heaterTemps[index]}°C: $value Ω")
+                }
+            }
+            Log.d(TAG, "=======================")
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
