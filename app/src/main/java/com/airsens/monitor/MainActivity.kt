@@ -469,6 +469,11 @@ class MainActivity : AppCompatActivity() {
 
         Log.d(TAG, "📊 Updating gas resistance chart with ${gasResistanceData.size} points")
 
+        // Save current viewport state to preserve user's view
+        val hadData = gasResistanceChart.data != null && gasResistanceChart.data.entryCount > 0
+        val savedLowestVisibleX = if (hadData) gasResistanceChart.lowestVisibleX else null
+        val savedHighestVisibleX = if (hadData) gasResistanceChart.highestVisibleX else null
+
         // Create bar entries (x = timestamp in seconds, y = resistance value)
         val entries = gasResistanceData.sortedBy { it.first }.map { (timestamp, value) ->
             BarEntry(timestamp.toFloat(), value)
@@ -482,6 +487,16 @@ class MainActivity : AppCompatActivity() {
         val barData = BarData(dataSet)
         gasResistanceChart.data = barData
         gasResistanceChart.notifyDataSetChanged()
+
+        // Restore viewport if user was viewing data, otherwise show latest data
+        if (hadData && savedLowestVisibleX != null && savedHighestVisibleX != null) {
+            // Preserve user's current view
+            gasResistanceChart.moveViewToX(savedLowestVisibleX)
+        } else {
+            // First load: show the most recent data
+            gasResistanceChart.moveViewToX(entries.last().x)
+        }
+
         gasResistanceChart.invalidate()
 
         Log.d(TAG, "✓ Gas resistance chart updated successfully")
@@ -502,7 +517,12 @@ class MainActivity : AppCompatActivity() {
 
         Log.d(TAG, "📊 Updating PM chart with PM10=${pm10Data.size}, PM2.5=${pm25Data.size}, PM1=${pm1Data.size} points")
 
+        // Save current viewport state to preserve user's view
+        val hadData = particleMatterChart.data != null && particleMatterChart.data.entryCount > 0
+        val savedLowestVisibleX = if (hadData) particleMatterChart.lowestVisibleX else null
+
         val dataSets = mutableListOf<ILineDataSet>()
+        var lastX = 0f
 
         // PM10 dataset
         if (pm10Data.isNotEmpty()) {
@@ -516,6 +536,7 @@ class MainActivity : AppCompatActivity() {
             dataSet.circleRadius = 3f
             dataSet.setDrawValues(false)
             dataSets.add(dataSet)
+            lastX = entries.last().x
         }
 
         // PM2.5 dataset
@@ -530,6 +551,7 @@ class MainActivity : AppCompatActivity() {
             dataSet.circleRadius = 3f
             dataSet.setDrawValues(false)
             dataSets.add(dataSet)
+            lastX = entries.last().x
         }
 
         // PM1 dataset
@@ -544,11 +566,22 @@ class MainActivity : AppCompatActivity() {
             dataSet.circleRadius = 3f
             dataSet.setDrawValues(false)
             dataSets.add(dataSet)
+            lastX = entries.last().x
         }
 
         val lineData = LineData(dataSets)
         particleMatterChart.data = lineData
         particleMatterChart.notifyDataSetChanged()
+
+        // Restore viewport if user was viewing data, otherwise show latest data
+        if (hadData && savedLowestVisibleX != null) {
+            // Preserve user's current view
+            particleMatterChart.moveViewToX(savedLowestVisibleX)
+        } else {
+            // First load: show the most recent data
+            particleMatterChart.moveViewToX(lastX)
+        }
+
         particleMatterChart.invalidate()
 
         Log.d(TAG, "✓ Particle matter chart updated successfully")
@@ -568,7 +601,12 @@ class MainActivity : AppCompatActivity() {
 
         Log.d(TAG, "📊 Updating Temp/Humidity chart with Temp=${temperatureData.size}, Humidity=${humidityData.size} points")
 
+        // Save current viewport state to preserve user's view
+        val hadData = tempHumidityChart.data != null && tempHumidityChart.data.entryCount > 0
+        val savedLowestVisibleX = if (hadData) tempHumidityChart.lowestVisibleX else null
+
         val dataSets = mutableListOf<ILineDataSet>()
+        var lastX = 0f
 
         // Temperature dataset
         if (temperatureData.isNotEmpty()) {
@@ -582,6 +620,7 @@ class MainActivity : AppCompatActivity() {
             dataSet.circleRadius = 3f
             dataSet.setDrawValues(false)
             dataSets.add(dataSet)
+            lastX = entries.last().x
         }
 
         // Humidity dataset
@@ -596,11 +635,22 @@ class MainActivity : AppCompatActivity() {
             dataSet.circleRadius = 3f
             dataSet.setDrawValues(false)
             dataSets.add(dataSet)
+            lastX = entries.last().x
         }
 
         val lineData = LineData(dataSets)
         tempHumidityChart.data = lineData
         tempHumidityChart.notifyDataSetChanged()
+
+        // Restore viewport if user was viewing data, otherwise show latest data
+        if (hadData && savedLowestVisibleX != null) {
+            // Preserve user's current view
+            tempHumidityChart.moveViewToX(savedLowestVisibleX)
+        } else {
+            // First load: show the most recent data
+            tempHumidityChart.moveViewToX(lastX)
+        }
+
         tempHumidityChart.invalidate()
 
         Log.d(TAG, "✓ Temp/Humidity chart updated successfully")
