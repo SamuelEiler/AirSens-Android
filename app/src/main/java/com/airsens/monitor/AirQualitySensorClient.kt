@@ -43,7 +43,10 @@ class AirQualitySensorClient(
         val pressure: Float? = null,
         val iaq: Float? = null,
         val gasResistance: Float? = null,
-        val iaqAccuracy: Int = 0
+        val iaqAccuracy: Int = 0,
+        // Gas profile data (new fields)
+        val gasResistanceProfile: Int = 0,  // 0 = no profile, 1+ = profile index
+        val gasResistanceArray: IntArray? = null  // Array of 10 int16 values at different heater temps
     )
 
     data class GasProfileData(

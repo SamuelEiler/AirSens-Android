@@ -38,7 +38,7 @@ class BulkDataParser {
 
     /**
      * Parse a packet containing a complete measurement record
-     * ESP32 sends raw measurement_record_t with no index/count in the packet
+     * ESP32 sends raw measurement_record_t (69 bytes with gas profile data)
      * @return Pair of (recordIndex, totalRecords) - estimated based on packet count
      */
     fun parsePacket(data: ByteArray): Pair<Int, Int>? {
@@ -49,7 +49,7 @@ class BulkDataParser {
 
         try {
             // Since ESP32 doesn't send record index/total, we track them locally
-            // The packet is just the raw measurement_record_t struct
+            // The packet is just the raw measurement_record_t struct (40 or 69 bytes)
             val recordIndex = recordCount
             recordCount++
 
@@ -65,7 +65,7 @@ class BulkDataParser {
 
     /**
      * Parse a complete measurement from a packet
-     * ESP32 measurement_record_t structure (40 bytes):
+     * ESP32 measurement_record_t structure (69 bytes with gas profile):
      * [0-3]: timestamp (uint32_t)
      * [4-7]: pm10 (float)
      * [8-11]: pm25 (float)
@@ -73,23 +73,26 @@ class BulkDataParser {
      * [16]: obstructed (uint8_t)
      * [17]: time_valid (uint8_t)
      * [18]: iaq_accuracy (uint8_t)
-     * [19]: reserved (uint8_t)
+     * [19]: reserved1 (uint8_t)
      * [20-23]: temperature (float)
      * [24-27]: humidity (float)
      * [28-31]: pressure (float)
      * [32-35]: iaq (float)
      * [36-39]: gas_resistance (float)
+     * [40]: gas_resistance_profile (uint8_t) - NEW
+     * [41]: reserved2 (uint8_t) - NEW
+     * [42-61]: gas_resistance_array[10] (int16_t[10]) - NEW
      */
     fun parseMeasurement(data: ByteArray): AirQualitySensorClient.MeasurementData? {
         if (data.size < 40) {
-            Log.e(TAG, "Packet too small: ${data.size} bytes (need 40 for measurement_record_t)")
+            Log.e(TAG, "Packet too small: ${data.size} bytes (need at least 40 for measurement_record_t)")
             return null
         }
 
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Parse all fields according to ESP32 struct layout
+            // Parse core measurement fields (same as before)
             val timestamp = buffer.getInt(0).toLong() and 0xFFFFFFFFL
             val pm10 = buffer.getFloat(4)
             val pm25 = buffer.getFloat(8)
@@ -103,7 +106,30 @@ class BulkDataParser {
             val iaq = buffer.getFloat(32)
             val gasResistance = buffer.getFloat(36)
 
-            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10, temp=$temperature°C")
+            // Parse gas profile data if packet is large enough (69 bytes)
+            var gasResistanceProfile = 0
+            var gasResistanceArray: IntArray? = null
+
+            if (data.size >= 42) {
+                gasResistanceProfile = buffer.get(40).toInt() and 0xFF
+
+                // Parse gas resistance array if profile index > 0
+                if (gasResistanceProfile > 0 && data.size >= 62) {
+                    try {
+                        gasResistanceArray = IntArray(10)
+                        for (i in 0 until 10) {
+                            val offset = 42 + (i * 2)
+                            gasResistanceArray[i] = buffer.getShort(offset).toInt()
+                        }
+                        Log.d(TAG, "Parsed gas profile #$gasResistanceProfile with 10 resistance values")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not parse gas resistance array", e)
+                    }
+                }
+            }
+
+            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10, temp=$temperature°C" +
+                (if (gasResistanceProfile > 0) ", profile=$gasResistanceProfile" else ""))
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
@@ -117,7 +143,9 @@ class BulkDataParser {
                 pressure = if (!pressure.isNaN() && pressure > 0) pressure else null,
                 iaq = if (!iaq.isNaN() && iaq >= 0) iaq else null,
                 gasResistance = if (!gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
-                iaqAccuracy = iaqAccuracy
+                iaqAccuracy = iaqAccuracy,
+                gasResistanceProfile = gasResistanceProfile,
+                gasResistanceArray = gasResistanceArray
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing measurement", e)
