@@ -478,22 +478,13 @@ class MainActivity : AppCompatActivity() {
             BarEntry(timestamp.toFloat(), value)
         }
 
-        if (gasResistanceChart.data != null && gasResistanceChart.data.dataSetCount > 0) {
-            // Update existing data set
-            val dataSet = gasResistanceChart.data.getDataSetByIndex(0) as BarDataSet
-            dataSet.clear()
-            dataSet.addEntries(entries)
-            gasResistanceChart.data.notifyDataChanged()
-            gasResistanceChart.notifyDataSetChanged()
-        } else {
-            // Create new data set if none exists
-            val dataSet = BarDataSet(entries, "Gas Resistance")
-            dataSet.color = Color.rgb(104, 241, 175)
-            dataSet.valueTextColor = Color.BLACK
-            dataSet.valueTextSize = 9f
-            val barData = BarData(dataSet)
-            gasResistanceChart.data = barData
-        }
+        // Always recreate dataset to ensure clean update
+        val dataSet = BarDataSet(entries, "Gas Resistance")
+        dataSet.color = Color.rgb(104, 241, 175)
+        dataSet.valueTextColor = Color.BLACK
+        dataSet.valueTextSize = 9f
+        val barData = BarData(dataSet)
+        gasResistanceChart.data = barData
 
         // Restore viewport if user was viewing data, otherwise show latest data
         if (hadData && savedLowestVisibleX != null && savedHighestVisibleX != null) {
@@ -541,8 +532,15 @@ class MainActivity : AppCompatActivity() {
                 pm10Entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
                 var dataSet = existingData.getDataSetByLabel("PM10", false) as? LineDataSet
                 if (dataSet != null) {
-                    dataSet.clear()
-                    dataSet.addEntries(pm10Entries)
+                    // Recreate dataset to update entries
+                    existingData.removeDataSet(dataSet)
+                    dataSet = LineDataSet(pm10Entries, "PM10")
+                    dataSet.color = Color.rgb(255, 99, 71)
+                    dataSet.setCircleColor(Color.rgb(255, 99, 71))
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 3f
+                    dataSet.setDrawValues(false)
+                    existingData.addDataSet(dataSet)
                     lastX = pm10Entries.last().x
                 } else {
                     Log.e(TAG, "PM10 DataSet not found. Creating and adding a new one.")
@@ -563,8 +561,15 @@ class MainActivity : AppCompatActivity() {
                 pm25Entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
                 var dataSet = existingData.getDataSetByLabel("PM2.5", false) as? LineDataSet
                 if (dataSet != null) {
-                    dataSet.clear()
-                    dataSet.addEntries(pm25Entries)
+                    // Recreate dataset to update entries
+                    existingData.removeDataSet(dataSet)
+                    dataSet = LineDataSet(pm25Entries, "PM2.5")
+                    dataSet.color = Color.rgb(255, 165, 0)
+                    dataSet.setCircleColor(Color.rgb(255, 165, 0))
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 3f
+                    dataSet.setDrawValues(false)
+                    existingData.addDataSet(dataSet)
                     if (pm25Entries.last().x > lastX) lastX = pm25Entries.last().x
                 } else {
                     Log.e(TAG, "PM2.5 DataSet not found. Creating and adding a new one.")
@@ -585,8 +590,15 @@ class MainActivity : AppCompatActivity() {
                 pm1Entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
                 var dataSet = existingData.getDataSetByLabel("PM1", false) as? LineDataSet
                 if (dataSet != null) {
-                    dataSet.clear()
-                    dataSet.addEntries(pm1Entries)
+                    // Recreate dataset to update entries
+                    existingData.removeDataSet(dataSet)
+                    dataSet = LineDataSet(pm1Entries, "PM1")
+                    dataSet.color = Color.rgb(135, 206, 250)
+                    dataSet.setCircleColor(Color.rgb(135, 206, 250))
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 3f
+                    dataSet.setDrawValues(false)
+                    existingData.addDataSet(dataSet)
                     if (pm1Entries.last().x > lastX) lastX = pm1Entries.last().x
                 } else {
                     Log.e(TAG, "PM1 DataSet not found. Creating and adding a new one.")
@@ -703,8 +715,15 @@ class MainActivity : AppCompatActivity() {
                 tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
                 var tempDataSet = existingData.getDataSetByLabel("Temperature (°C)", false) as? LineDataSet
                 if (tempDataSet != null) {
-                    tempDataSet.clear()
-                    tempDataSet.addEntries(tempEntries)
+                    // Recreate dataset to update entries
+                    existingData.removeDataSet(tempDataSet)
+                    tempDataSet = LineDataSet(tempEntries, "Temperature (°C)")
+                    tempDataSet.color = Color.rgb(255, 69, 0)
+                    tempDataSet.setCircleColor(Color.rgb(255, 69, 0))
+                    tempDataSet.lineWidth = 2f
+                    tempDataSet.circleRadius = 3f
+                    tempDataSet.setDrawValues(false)
+                    existingData.addDataSet(tempDataSet)
                     if (tempEntries.isNotEmpty()) lastX = tempEntries.last().x
                 } else {
                     Log.e(TAG, "Temperature DataSet not found. Creating and adding a new one.")
@@ -725,8 +744,15 @@ class MainActivity : AppCompatActivity() {
                 humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
                 var humDataSet = existingData.getDataSetByLabel("Humidity (%)", false) as? LineDataSet
                 if (humDataSet != null) {
-                    humDataSet.clear()
-                    humDataSet.addEntries(humEntries)
+                    // Recreate dataset to update entries
+                    existingData.removeDataSet(humDataSet)
+                    humDataSet = LineDataSet(humEntries, "Humidity (%)")
+                    humDataSet.color = Color.rgb(30, 144, 255)
+                    humDataSet.setCircleColor(Color.rgb(30, 144, 255))
+                    humDataSet.lineWidth = 2f
+                    humDataSet.circleRadius = 3f
+                    humDataSet.setDrawValues(false)
+                    existingData.addDataSet(humDataSet)
                     if (humEntries.isNotEmpty() && humEntries.last().x > lastX) lastX = humEntries.last().x
                 } else {
                     Log.e(TAG, "Humidity DataSet not found. Creating and adding a new one.")
