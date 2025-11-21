@@ -65,7 +65,7 @@ class BulkDataParser {
 
     /**
      * Parse a complete measurement from a packet
-     * ESP32 measurement_record_t structure (69 bytes with gas profile):
+     * ESP32 measurement_record_t structure (89 bytes with extended gas profile):
      * [0-3]: timestamp (uint32_t)
      * [4-7]: pm10 (float)
      * [8-11]: pm25 (float)
@@ -79,9 +79,9 @@ class BulkDataParser {
      * [28-31]: pressure (float)
      * [32-35]: iaq (float)
      * [36-39]: gas_resistance (float)
-     * [40]: gas_resistance_profile (uint8_t) - NEW
-     * [41]: reserved2 (uint8_t) - NEW
-     * [42-61]: gas_resistance_array[10] (int16_t[10]) - NEW
+     * [40]: gas_resistance_profile (uint8_t)
+     * [41]: reserved2 (uint8_t)
+     * [42-81]: gas_resistance_array[10] (int32_t[10]) - 4 bytes per element
      */
     fun parseMeasurement(data: ByteArray): AirQualitySensorClient.MeasurementData? {
         if (data.size < 40) {
@@ -114,19 +114,20 @@ class BulkDataParser {
                 gasResistanceProfile = buffer.get(40).toInt() and 0xFF
 
                 // Parse gas resistance array if profile index > 0
-                if (gasResistanceProfile > 0 && data.size >= 62) {
+                // Array is now 10 int32_t values (40 bytes total: 42 to 81)
+                if (gasResistanceProfile > 0 && data.size >= 82) {
                     try {
                         gasResistanceArray = IntArray(10)
 
                         // Debug: log hex of array region
-                        val arrayHex = data.sliceArray(42 until minOf(62, data.size))
+                        val arrayHex = data.sliceArray(42 until minOf(82, data.size))
                             .joinToString(" ") { "%02X".format(it) }
-                        Log.d(TAG, "Gas array raw hex (bytes 42-61): $arrayHex")
+                        Log.d(TAG, "Gas array raw hex (bytes 42-81): $arrayHex")
 
                         for (i in 0 until 10) {
-                            val offset = 42 + (i * 2)
-                            if (offset + 1 < data.size) {
-                                gasResistanceArray[i] = buffer.getShort(offset).toInt()
+                            val offset = 42 + (i * 4)  // 4 bytes per int32_t
+                            if (offset + 3 < data.size) {
+                                gasResistanceArray[i] = buffer.getInt(offset)
                                 Log.d(TAG, "  Array[$i] offset=$offset: ${gasResistanceArray[i]}")
                             }
                         }
