@@ -474,19 +474,26 @@ class MainActivity : AppCompatActivity() {
         val savedLowestVisibleX = if (hadData) gasResistanceChart.lowestVisibleX else null
         val savedHighestVisibleX = if (hadData) gasResistanceChart.highestVisibleX else null
 
-        // Create bar entries (x = timestamp in seconds, y = resistance value)
         val entries = gasResistanceData.sortedBy { it.first }.map { (timestamp, value) ->
             BarEntry(timestamp.toFloat(), value)
         }
 
-        val dataSet = BarDataSet(entries, "Gas Resistance")
-        dataSet.color = Color.rgb(104, 241, 175)
-        dataSet.valueTextColor = Color.BLACK
-        dataSet.valueTextSize = 9f
-
-        val barData = BarData(dataSet)
-        gasResistanceChart.data = barData
-        gasResistanceChart.notifyDataSetChanged()
+        if (gasResistanceChart.data != null && gasResistanceChart.data.dataSetCount > 0) {
+            // Update existing data set
+            val dataSet = gasResistanceChart.data.getDataSetByIndex(0) as BarDataSet
+            dataSet.clear()
+            dataSet.addEntries(entries)
+            gasResistanceChart.data.notifyDataChanged()
+            gasResistanceChart.notifyDataSetChanged()
+        } else {
+            // Create new data set if none exists
+            val dataSet = BarDataSet(entries, "Gas Resistance")
+            dataSet.color = Color.rgb(104, 241, 175)
+            dataSet.valueTextColor = Color.BLACK
+            dataSet.valueTextSize = 9f
+            val barData = BarData(dataSet)
+            gasResistanceChart.data = barData
+        }
 
         // Restore viewport if user was viewing data, otherwise show latest data
         if (hadData && savedLowestVisibleX != null && savedHighestVisibleX != null) {
@@ -524,54 +531,133 @@ class MainActivity : AppCompatActivity() {
         val dataSets = mutableListOf<ILineDataSet>()
         var lastX = 0f
 
-        // PM10 dataset
-        if (pm10Data.isNotEmpty()) {
-            val entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
-            }
-            val dataSet = LineDataSet(entries, "PM10")
-            dataSet.color = Color.rgb(255, 99, 71)
-            dataSet.setCircleColor(Color.rgb(255, 99, 71))
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 3f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            lastX = entries.last().x
-        }
+        if (particleMatterChart.data != null && particleMatterChart.data.dataSetCount > 0) {
+            // Update existing data sets
+            val existingData = particleMatterChart.data
 
-        // PM2.5 dataset
-        if (pm25Data.isNotEmpty()) {
-            val entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
+            // PM10 dataset
+            var pm10Entries: List<Entry>? = null
+            if (pm10Data.isNotEmpty()) {
+                pm10Entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+                var dataSet = existingData.getDataSetByLabel("PM10", false) as? LineDataSet
+                if (dataSet != null) {
+                    dataSet.clear()
+                    dataSet.addEntries(pm10Entries)
+                    lastX = pm10Entries.last().x
+                } else {
+                    Log.e(TAG, "PM10 DataSet not found. Creating and adding a new one.")
+                    dataSet = LineDataSet(pm10Entries, "PM10")
+                    dataSet.color = Color.rgb(255, 99, 71)
+                    dataSet.setCircleColor(Color.rgb(255, 99, 71))
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 3f
+                    dataSet.setDrawValues(false)
+                    existingData.addDataSet(dataSet) // Directly add to existing LineData
+                    lastX = pm10Entries.last().x
+                }
             }
-            val dataSet = LineDataSet(entries, "PM2.5")
-            dataSet.color = Color.rgb(255, 165, 0)
-            dataSet.setCircleColor(Color.rgb(255, 165, 0))
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 3f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            lastX = entries.last().x
-        }
 
-        // PM1 dataset
-        if (pm1Data.isNotEmpty()) {
-            val entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
+            // PM2.5 dataset
+            var pm25Entries: List<Entry>? = null
+            if (pm25Data.isNotEmpty()) {
+                pm25Entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+                var dataSet = existingData.getDataSetByLabel("PM2.5", false) as? LineDataSet
+                if (dataSet != null) {
+                    dataSet.clear()
+                    dataSet.addEntries(pm25Entries)
+                    if (pm25Entries.last().x > lastX) lastX = pm25Entries.last().x
+                } else {
+                    Log.e(TAG, "PM2.5 DataSet not found. Creating and adding a new one.")
+                    dataSet = LineDataSet(pm25Entries, "PM2.5")
+                    dataSet.color = Color.rgb(255, 165, 0)
+                    dataSet.setCircleColor(Color.rgb(255, 165, 0))
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 3f
+                    dataSet.setDrawValues(false)
+                    existingData.addDataSet(dataSet) // Directly add to existing LineData
+                    if (pm25Entries.last().x > lastX) lastX = pm25Entries.last().x
+                }
             }
-            val dataSet = LineDataSet(entries, "PM1")
-            dataSet.color = Color.rgb(135, 206, 250)
-            dataSet.setCircleColor(Color.rgb(135, 206, 250))
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 3f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            lastX = entries.last().x
-        }
 
-        val lineData = LineData(dataSets)
-        particleMatterChart.data = lineData
-        particleMatterChart.notifyDataSetChanged()
+            // PM1 dataset
+            var pm1Entries: List<Entry>? = null
+            if (pm1Data.isNotEmpty()) {
+                pm1Entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+                var dataSet = existingData.getDataSetByLabel("PM1", false) as? LineDataSet
+                if (dataSet != null) {
+                    dataSet.clear()
+                    dataSet.addEntries(pm1Entries)
+                    if (pm1Entries.last().x > lastX) lastX = pm1Entries.last().x
+                } else {
+                    Log.e(TAG, "PM1 DataSet not found. Creating and adding a new one.")
+                    dataSet = LineDataSet(pm1Entries, "PM1")
+                    dataSet.color = Color.rgb(135, 206, 250)
+                    dataSet.setCircleColor(Color.rgb(135, 206, 250))
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 3f
+                    dataSet.setDrawValues(false)
+                    existingData.addDataSet(dataSet) // Directly add to existing LineData
+                    if (pm1Entries.last().x > lastX) lastX = pm1Entries.last().x
+                }
+            }
+
+            particleMatterChart.data.notifyDataChanged()
+            particleMatterChart.notifyDataSetChanged()
+
+        } else {
+            // Create new data sets if none exist
+            val dataSets = mutableListOf<ILineDataSet>() // Re-introduce dataSets declaration
+
+            // PM10 dataset
+            var pm10Entries: List<Entry>? = null
+            if (pm10Data.isNotEmpty()) {
+                pm10Entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) ->
+                    Entry(timestamp.toFloat(), value)
+                }
+                val dataSet = LineDataSet(pm10Entries, "PM10")
+                dataSet.color = Color.rgb(255, 99, 71)
+                dataSet.setCircleColor(Color.rgb(255, 99, 71))
+                dataSet.lineWidth = 2f
+                dataSet.circleRadius = 3f
+                dataSet.setDrawValues(false)
+                dataSets.add(dataSet)
+                lastX = pm10Entries.last().x
+            }
+
+            // PM2.5 dataset
+            var pm25Entries: List<Entry>? = null
+            if (pm25Data.isNotEmpty()) {
+                pm25Entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) ->
+                    Entry(timestamp.toFloat(), value)
+                }
+                val dataSet = LineDataSet(pm25Entries, "PM2.5")
+                dataSet.color = Color.rgb(255, 165, 0)
+                dataSet.setCircleColor(Color.rgb(255, 165, 0))
+                dataSet.lineWidth = 2f
+                dataSet.circleRadius = 3f
+                dataSet.setDrawValues(false)
+                dataSets.add(dataSet)
+                if (pm25Entries.last().x > lastX) lastX = pm25Entries.last().x
+            }
+
+            // PM1 dataset
+            var pm1Entries: List<Entry>? = null
+            if (pm1Data.isNotEmpty()) {
+                pm1Entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) ->
+                    Entry(timestamp.toFloat(), value)
+                }
+                val dataSet = LineDataSet(pm1Entries, "PM1")
+                dataSet.color = Color.rgb(135, 206, 250)
+                dataSet.setCircleColor(Color.rgb(135, 206, 250))
+                dataSet.lineWidth = 2f
+                dataSet.circleRadius = 3f
+                dataSet.setDrawValues(false)
+                dataSets.add(dataSet)
+                if (pm1Entries.last().x > lastX) lastX = pm1Entries.last().x
+            }
+            val lineData = LineData(dataSets) // Use the newly declared dataSets
+            particleMatterChart.data = lineData
+        }
 
         // Restore viewport if user was viewing data, otherwise show latest data
         if (hadData && savedLowestVisibleX != null) {
@@ -605,42 +691,98 @@ class MainActivity : AppCompatActivity() {
         val hadData = tempHumidityChart.data != null && tempHumidityChart.data.entryCount > 0
         val savedLowestVisibleX = if (hadData) tempHumidityChart.lowestVisibleX else null
 
-        val dataSets = mutableListOf<ILineDataSet>()
         var lastX = 0f
 
-        // Temperature dataset
-        if (temperatureData.isNotEmpty()) {
-            val entries = temperatureData.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
-            }
-            val dataSet = LineDataSet(entries, "Temperature (°C)")
-            dataSet.color = Color.rgb(255, 69, 0)
-            dataSet.setCircleColor(Color.rgb(255, 69, 0))
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 3f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            lastX = entries.last().x
-        }
+        if (tempHumidityChart.data != null && tempHumidityChart.data.dataSetCount > 0) {
+            // Update existing data sets
+            val existingData = tempHumidityChart.data
 
-        // Humidity dataset
-        if (humidityData.isNotEmpty()) {
-            val entries = humidityData.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
+            // Temperature dataset
+            var tempEntries: List<Entry>? = null
+            if (temperatureData.isNotEmpty()) {
+                tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+                var tempDataSet = existingData.getDataSetByLabel("Temperature (°C)", false) as? LineDataSet
+                if (tempDataSet != null) {
+                    tempDataSet.clear()
+                    tempDataSet.addEntries(tempEntries)
+                    if (tempEntries.isNotEmpty()) lastX = tempEntries.last().x
+                } else {
+                    Log.e(TAG, "Temperature DataSet not found. Creating and adding a new one.")
+                    tempDataSet = LineDataSet(tempEntries, "Temperature (°C)")
+                    tempDataSet.color = Color.rgb(255, 69, 0)
+                    tempDataSet.setCircleColor(Color.rgb(255, 69, 0))
+                    tempDataSet.lineWidth = 2f
+                    tempDataSet.circleRadius = 3f
+                    tempDataSet.setDrawValues(false)
+                    existingData.addDataSet(tempDataSet) // Add to existing LineData
+                    if (tempEntries.isNotEmpty()) lastX = tempEntries.last().x
+                }
             }
-            val dataSet = LineDataSet(entries, "Humidity (%)")
-            dataSet.color = Color.rgb(30, 144, 255)
-            dataSet.setCircleColor(Color.rgb(30, 144, 255))
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 3f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            lastX = entries.last().x
-        }
 
-        val lineData = LineData(dataSets)
-        tempHumidityChart.data = lineData
-        tempHumidityChart.notifyDataSetChanged()
+            // Humidity dataset
+            var humEntries: List<Entry>? = null
+            if (humidityData.isNotEmpty()) {
+                humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+                var humDataSet = existingData.getDataSetByLabel("Humidity (%)", false) as? LineDataSet
+                if (humDataSet != null) {
+                    humDataSet.clear()
+                    humDataSet.addEntries(humEntries)
+                    if (humEntries.isNotEmpty() && humEntries.last().x > lastX) lastX = humEntries.last().x
+                } else {
+                    Log.e(TAG, "Humidity DataSet not found. Creating and adding a new one.")
+                    humDataSet = LineDataSet(humEntries, "Humidity (%)")
+                    humDataSet.color = Color.rgb(30, 144, 255)
+                    humDataSet.setCircleColor(Color.rgb(30, 144, 255))
+                    humDataSet.lineWidth = 2f
+                    humDataSet.circleRadius = 3f
+                    humDataSet.setDrawValues(false)
+                    existingData.addDataSet(humDataSet) // Add to existing LineData
+                    if (humEntries.isNotEmpty() && humEntries.last().x > lastX) lastX = humEntries.last().x
+                }
+            }
+
+            tempHumidityChart.data.notifyDataChanged()
+            tempHumidityChart.notifyDataSetChanged()
+
+        } else {
+            // Create new data sets if none exist
+            val newTempHumidityDataSets = mutableListOf<ILineDataSet>()
+
+            // Temperature dataset
+            var tempEntries: List<Entry>? = null
+            if (temperatureData.isNotEmpty()) {
+                tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) ->
+                    Entry(timestamp.toFloat(), value)
+                }
+                val dataSet = LineDataSet(tempEntries, "Temperature (°C)")
+                dataSet.color = Color.rgb(255, 69, 0)
+                dataSet.setCircleColor(Color.rgb(255, 69, 0))
+                dataSet.lineWidth = 2f
+                dataSet.circleRadius = 3f
+                dataSet.setDrawValues(false)
+                newTempHumidityDataSets.add(dataSet)
+                lastX = tempEntries.last().x
+            }
+
+            // Humidity dataset
+            var humEntries: List<Entry>? = null
+            if (humidityData.isNotEmpty()) {
+                humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) ->
+                    Entry(timestamp.toFloat(), value)
+                }
+                val dataSet = LineDataSet(humEntries, "Humidity (%)")
+                dataSet.color = Color.rgb(30, 144, 255)
+                dataSet.setCircleColor(Color.rgb(30, 144, 255))
+                dataSet.lineWidth = 2f
+                dataSet.circleRadius = 3f
+                dataSet.setDrawValues(false)
+                newTempHumidityDataSets.add(dataSet)
+                if (humEntries.isNotEmpty() && humEntries.last().x > lastX) lastX = humEntries.last().x
+            }
+
+            val lineData = LineData(newTempHumidityDataSets)
+            tempHumidityChart.data = lineData
+        }
 
         // Restore viewport if user was viewing data, otherwise show latest data
         if (hadData && savedLowestVisibleX != null) {
