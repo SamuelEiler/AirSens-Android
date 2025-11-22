@@ -186,15 +186,25 @@ class GasProfileChart(context: Context, attrs: AttributeSet? = null) : FrameLayo
         val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         timeLabel.text = "Time: ${timeFormat.format(date)}"
 
+        // Normalize values to percentage (0-100) for better radar chart visualization
+        val minValue = dataPoint.gasResistanceArray.minOrNull()?.toFloat() ?: 0f
+        val maxValue = dataPoint.gasResistanceArray.maxOrNull()?.toFloat() ?: 100f
+        val range = if (maxValue > minValue) maxValue - minValue else 1f
+
         // Create radar entries for each heater profile (1-10)
         val entries = mutableListOf<RadarEntry>()
         for (i in 0 until 10) {
-            // RadarEntry takes (value, label_index)
-            entries.add(RadarEntry(dataPoint.gasResistanceArray[i].toFloat()))
+            // Normalize to 0-100 percentage scale
+            val normalizedValue = if (range > 0) {
+                ((dataPoint.gasResistanceArray[i] - minValue) / range) * 100f
+            } else {
+                50f  // If all values are the same, show 50%
+            }
+            entries.add(RadarEntry(normalizedValue))
         }
 
         // Create dataset with all profiles
-        val dataSet = RadarDataSet(entries, "Gas Resistance (Ω)")
+        val dataSet = RadarDataSet(entries, "Gas Resistance (%)")
         dataSet.color = Color.rgb(104, 241, 175)  // Cyan/Teal
         dataSet.fillColor = Color.rgb(104, 241, 175)
         dataSet.setDrawFilled(true)
@@ -217,9 +227,9 @@ class GasProfileChart(context: Context, attrs: AttributeSet? = null) : FrameLayo
             }
         }
 
-        // Get max value for scaling
-        val maxValue = dataPoint.gasResistanceArray.maxOrNull()?.toFloat() ?: 100000f
-        radarChart.yAxis.axisMaximum = maxValue * 1.1f  // 10% padding
+        // Set Y-axis to 0-100% scale
+        radarChart.yAxis.axisMinimum = 0f
+        radarChart.yAxis.axisMaximum = 100f
 
         radarChart.invalidate()
     }
