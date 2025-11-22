@@ -480,6 +480,11 @@ class MainActivity : AppCompatActivity() {
 
         Log.d(TAG, "📊 Updating IAQ chart with ${iaqData.size} points")
 
+        // Save current viewport state to preserve user's zoom/pan
+        val hadData = iaqChart.data != null && iaqChart.data.entryCount > 0
+        val savedLowestVisibleX = if (hadData) iaqChart.lowestVisibleX else null
+        val savedHighestVisibleX = if (hadData) iaqChart.highestVisibleX else null
+
         val entries = iaqData.sortedBy { it.first }.mapIndexed { index, (timestamp, value) ->
             Entry(index.toFloat(), value)
         }
@@ -511,6 +516,15 @@ class MainActivity : AppCompatActivity() {
                     return ""
                 }
             }
+        }
+
+        // Restore viewport if user was viewing data, otherwise show latest data
+        if (hadData && savedLowestVisibleX != null && savedHighestVisibleX != null) {
+            // Preserve user's current view
+            iaqChart.moveViewToX(savedLowestVisibleX)
+        } else if (entries.isNotEmpty()) {
+            // First load: show the most recent data
+            iaqChart.moveViewToX(entries.last().x)
         }
 
         iaqChart.invalidate()
