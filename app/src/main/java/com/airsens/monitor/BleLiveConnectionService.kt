@@ -23,6 +23,7 @@ import androidx.core.app.NotificationCompat
 import com.airsens.monitor.database.AppDatabase
 import com.airsens.monitor.database.MeasurementEntity
 import kotlinx.coroutines.*
+import org.json.JSONArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.*
@@ -90,6 +91,7 @@ class BleLiveConnectionService : Service() {
     private val connectionHealthCheckInterval = 60000L // Check every 60 seconds
     private val connectionTimeoutMs = 120000L // 2 minutes without data = dead connection
     private var healthCheckJob: Job? = null
+    private var initialConnectionEstablished = false  // Track if we've done initial setup
 
     // Bluetooth state receiver for handling BT on/off
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
@@ -476,17 +478,22 @@ class BleLiveConnectionService : Service() {
 
                     // Setup all characteristics sequentially to avoid GATT queue conflicts
                     serviceScope.launch {
-                        // Step 1: Enable time request indications
-                        val timeRequestSuccess = enableTimeRequestIndications(gatt)
-                        if (!timeRequestSuccess) {
-                            Log.w(TAG, "Failed to enable TIME_REQUEST indications, but continuing anyway")
+                        if (!initialConnectionEstablished) {
+                            // FIRST CONNECTION: Full setup
+                            Log.i(TAG, "First connection - performing full setup")
+
+                            // Step 1: Enable time request indications
+                            val timeRequestSuccess = enableTimeRequestIndications(gatt)
+                            if (!timeRequestSuccess) {
+                                Log.w(TAG, "Failed to enable TIME_REQUEST indications, but continuing anyway")
+                            }
+
+                            // Step 2: Send initial time sync (wait longer for GATT queue to clear after CCCD write)
+                            delay(1500)
+                            sendTimeSync(gatt)
                         }
 
-                        // Step 2: Send initial time sync (wait longer for GATT queue to clear after CCCD write)
-                        delay(1500)
-                        sendTimeSync(gatt)
-
-                        // Step 3: Subscribe to live MEASUREMENT notifications (wait longer for GATT queue to clear)
+                        // Step 3: Subscribe to live MEASUREMENT notifications (for initial connection OR after auto-reconnect)
                         delay(2000)
                         val measurementSuccess = enableMeasurementNotifications(gatt)
                         if (!measurementSuccess) {
@@ -512,14 +519,19 @@ class BleLiveConnectionService : Service() {
                         }
                         Log.i(TAG, "✓ Subscribed to DATA_RESPONSE notifications")
 
-                        // Connection fully established
-                        if (continuation.isActive) {
-                            continuation.resume(gatt) {}
-                        }
+                        // Connection fully established (only resume continuation on first connection)
+                        if (!initialConnectionEstablished) {
+                            initialConnectionEstablished = true
+                            if (continuation.isActive) {
+                                continuation.resume(gatt) {}
+                            }
 
-                        // Step 5: Request initial bulk data sync after connection established
-                        delay(500)
-                        requestInitialBulkData(gatt)
+                            // Step 5: Request initial bulk data sync after connection established
+                            delay(500)
+                            requestInitialBulkData(gatt)
+                        } else {
+                            Log.i(TAG, "Auto-reconnected and re-subscribed to notifications")
+                        }
                     }
                 } else {
                     Log.e(TAG, "Service discovery failed: $status")
@@ -536,20 +548,43 @@ class BleLiveConnectionService : Service() {
                 characteristic: BluetoothGattCharacteristic,
                 value: ByteArray
             ) {
+                Log.i(TAG, "=== BLE NOTIFICATION RECEIVED ===")
+                Log.i(TAG, "UUID: ${characteristic.uuid}")
+                Log.i(TAG, "Size: ${value.size} bytes")
+                if (value.isNotEmpty()) {
+                    val hexPreview = value.take(32).joinToString(" ") { "%02X".format(it) }
+                    Log.i(TAG, "Hex: $hexPreview")
+                }
+
                 when (characteristic.uuid) {
                     TIME_REQUEST_UUID -> {
-                        Log.i(TAG, "ESP32 requesting time sync")
+                        Log.i(TAG, "✓ TIME_REQUEST - ESP32 requesting time sync")
                         serviceScope.launch {
                             sendTimeSync(gatt)
                         }
                     }
                     MEASUREMENT_UUID -> {
-                        Log.d(TAG, "Live measurement received: ${value.size} bytes")
+                        Log.i(TAG, "✓ MEASUREMENT (live) - ${value.size} bytes")
+                        if (value.size >= 40) {
+                            Log.i(TAG, "  ✓ Valid measurement size (${value.size} bytes)")
+                        } else {
+                            Log.w(TAG, "  ⚠️ WARNING: Measurement too small (${value.size} bytes)")
+                        }
                         handleLiveMeasurement(value)
                     }
                     DATA_RESPONSE_UUID -> {
-                        Log.d(TAG, "Bulk data packet received: ${value.size} bytes")
+                        Log.i(TAG, "✓ DATA_RESPONSE (bulk) - ${value.size} bytes")
+                        if (value.size < 40) {
+                            Log.w(TAG, "  ⚠️ WARNING: Bulk data too small (${value.size} bytes)")
+                        } else if (value.size < 82) {
+                            Log.w(TAG, "  ⚠️ WARNING: No gas profile (${value.size} bytes, need 82)")
+                        } else {
+                            Log.i(TAG, "  ✓ Full packet with gas profile (${value.size} bytes)")
+                        }
                         handleBulkDataPacket(value, gatt)
+                    }
+                    else -> {
+                        Log.w(TAG, "⚠️ Unknown UUID: ${characteristic.uuid}")
                     }
                 }
             }
@@ -559,26 +594,48 @@ class BleLiveConnectionService : Service() {
                 gatt: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic
             ) {
+                val value = characteristic.value
+                Log.i(TAG, "=== BLE NOTIFICATION RECEIVED (DEPRECATED API) ===")
+                Log.i(TAG, "UUID: ${characteristic.uuid}")
+                Log.i(TAG, "Size: ${value?.size ?: 0} bytes")
+                if (value != null && value.isNotEmpty()) {
+                    val hexPreview = value.take(32).joinToString(" ") { "%02X".format(it) }
+                    Log.i(TAG, "Hex: $hexPreview")
+                }
+
                 when (characteristic.uuid) {
                     TIME_REQUEST_UUID -> {
-                        Log.i(TAG, "ESP32 requesting time sync (deprecated)")
+                        Log.i(TAG, "✓ TIME_REQUEST - ESP32 requesting time sync (deprecated)")
                         serviceScope.launch {
                             sendTimeSync(gatt)
                         }
                     }
                     MEASUREMENT_UUID -> {
-                        val value = characteristic.value
                         if (value != null) {
-                            Log.d(TAG, "Live measurement received (deprecated): ${value.size} bytes")
+                            Log.i(TAG, "✓ MEASUREMENT (live, deprecated) - ${value.size} bytes")
+                            if (value.size >= 40) {
+                                Log.i(TAG, "  ✓ Valid measurement size (${value.size} bytes)")
+                            } else {
+                                Log.w(TAG, "  ⚠️ WARNING: Measurement too small (${value.size} bytes)")
+                            }
                             handleLiveMeasurement(value)
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        val value = characteristic.value
                         if (value != null) {
-                            Log.d(TAG, "Bulk data packet received (deprecated): ${value.size} bytes")
+                            Log.i(TAG, "✓ DATA_RESPONSE (bulk, deprecated) - ${value.size} bytes")
+                            if (value.size < 40) {
+                                Log.w(TAG, "  ⚠️ WARNING: Bulk data too small (${value.size} bytes)")
+                            } else if (value.size < 82) {
+                                Log.w(TAG, "  ⚠️ WARNING: No gas profile (${value.size} bytes, need 82)")
+                            } else {
+                                Log.i(TAG, "  ✓ Full packet with gas profile (${value.size} bytes)")
+                            }
                             handleBulkDataPacket(value, gatt)
                         }
+                    }
+                    else -> {
+                        Log.w(TAG, "⚠️ Unknown UUID (deprecated): ${characteristic.uuid}")
                     }
                 }
             }
@@ -905,6 +962,12 @@ class BleLiveConnectionService : Service() {
         // Save to database
         serviceScope.launch {
             try {
+                val gasResistanceArrayJson = if (measurement.gasResistanceArray != null) {
+                    JSONArray(measurement.gasResistanceArray.toList()).toString()
+                } else {
+                    null
+                }
+
                 val entity = MeasurementEntity(
                     timestamp = measurement.timestamp,
                     receivedAt = System.currentTimeMillis(),
@@ -918,7 +981,9 @@ class BleLiveConnectionService : Service() {
                     pressure = measurement.pressure,
                     iaq = measurement.iaq,
                     gasResistance = measurement.gasResistance,
-                    iaqAccuracy = measurement.iaqAccuracy
+                    iaqAccuracy = measurement.iaqAccuracy,
+                    gasResistanceProfile = measurement.gasResistanceProfile,
+                    gasResistanceArray = gasResistanceArrayJson
                 )
 
                 database.measurementDao().insert(entity)
@@ -932,57 +997,69 @@ class BleLiveConnectionService : Service() {
     }
 
     private fun parseMeasurementData(data: ByteArray): AirQualitySensorClient.MeasurementData? {
-        if (data.size < 18) {
-            Log.w(TAG, "Measurement data too short: ${data.size} bytes")
+        // Expected 89-byte fixed structure (no variable length)
+        if (data.size < 89) {
+            Log.w(TAG, "❌ Measurement data too short: ${data.size} bytes (expected 89)")
             return null
         }
 
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Read sensor mask
-            val sensorMask = buffer.get(0).toInt() and 0xFF
-            val hasBME690 = (sensorMask and 0x02) != 0
+            Log.d(TAG, "🔍 Parsing 89-byte BLE measurement")
 
-            Log.d(TAG, "🔍 Parsing measurement: dataSize=${data.size}, sensorMask=0x${sensorMask.toString(16)}, hasBME690=$hasBME690")
+            // Parse fixed 89-byte structure:
+            // [0-3]:    timestamp (uint32_t)
+            // [4-7]:    pm10 (float)
+            // [8-11]:   pm25 (float)
+            // [12-15]:  pm1 (float)
+            // [16]:     obstructed (uint8_t)
+            // [17]:     time_valid (uint8_t)
+            // [18]:     iaq_accuracy (uint8_t)
+            // [19]:     reserved1 (skip)
+            // [20-23]:  temperature (float)
+            // [24-27]:  humidity (float)
+            // [28-31]:  pressure (float)
+            // [32-35]:  iaq (float)
+            // [36-39]:  gas_resistance (float)
+            // [40]:     gas_resistance_profile (uint8_t)
+            // [41]:     reserved2 (skip)
+            // [42-81]:  gas_resistance_array[10] (int32_t[10])
 
-            // Read timestamp
-            val timestamp = buffer.getInt(1).toLong() and 0xFFFFFFFFL
+            val timestamp = buffer.int.toLong() and 0xFFFFFFFFL
+            val pm10 = buffer.float
+            val pm25 = buffer.float
+            val pm1 = buffer.float
 
-            // Read PM values
-            val pm10 = buffer.getFloat(5)
-            val pm25 = buffer.getFloat(9)
-            val pm1 = buffer.getFloat(13)
+            val obstructed = buffer.get().toInt() != 0
+            val timeValid = buffer.get().toInt() != 0
+            val iaqAccuracy = buffer.get().toInt() and 0xFF
+            buffer.get()  // Skip reserved1
 
-            // Read flags
-            val flags = buffer.get(17).toInt() and 0xFF
-            val obstructed = (flags and 0x01) != 0
-            val timeValid = (flags and 0x02) != 0
-            val iaqAccuracy = (flags shr 2) and 0x03
+            val temperature = buffer.float
+            val humidity = buffer.float
+            val pressure = buffer.float
+            val iaq = buffer.float
+            val gasResistance = buffer.float
 
-            // Read environmental data if available
-            var temperature: Float? = null
-            var humidity: Float? = null
-            var pressure: Float? = null
-            var iaq: Float? = null
-            var gasResistance: Float? = null
+            val gasResistanceProfile = buffer.get().toInt() and 0xFF
+            buffer.get()  // Skip reserved2
 
-            if (hasBME690 && data.size >= 38) {
-                val rawTemp = buffer.getFloat(18)
-                val rawHumid = buffer.getFloat(22)
-                val rawPress = buffer.getFloat(26)
-                val rawIaq = buffer.getFloat(30)
-                val rawGasRes = buffer.getFloat(34)
+            // Parse gas resistance array (10 int32_t values)
+            val gasResistanceArray = IntArray(10) { buffer.int }
 
-                Log.d(TAG, "🌡️ Raw BME690 data: temp=$rawTemp, humid=$rawHumid, press=$rawPress, iaq=$rawIaq, gasRes=$rawGasRes")
+            Log.d(TAG, "🌡️ Parsed: PM10=$pm10, PM2.5=$pm25, PM1=$pm1")
+            Log.d(TAG, "🌡️ Temp=${temperature}°C, Humidity=$humidity%, Pressure=$pressure Pa")
+            Log.d(TAG, "🌡️ IAQ=$iaq, Gas=$gasResistance Ω")
 
-                temperature = rawTemp
-                humidity = rawHumid
-                pressure = rawPress
-                iaq = rawIaq
-                gasResistance = rawGasRes
+            if (gasResistanceProfile > 0) {
+                Log.i(TAG, "✓ GAS RESISTANCE ARRAY RECEIVED (profile=$gasResistanceProfile):")
+                val arrayStr = gasResistanceArray.joinToString(", ", "[", "]")
+                Log.i(TAG, "  Values: $arrayStr")
+                Log.d(TAG, "  T0=${gasResistanceArray[0]}, T1=${gasResistanceArray[1]}, T2=${gasResistanceArray[2]}, T3=${gasResistanceArray[3]}, T4=${gasResistanceArray[4]}")
+                Log.d(TAG, "  T5=${gasResistanceArray[5]}, T6=${gasResistanceArray[6]}, T7=${gasResistanceArray[7]}, T8=${gasResistanceArray[8]}, T9=${gasResistanceArray[9]}")
             } else {
-                Log.w(TAG, "⚠️ BME690 data not available: hasBME690=$hasBME690, dataSize=${data.size} (need >=38)")
+                Log.d(TAG, "⚠️ No gas profile data (profile=0)")
             }
 
             return AirQualitySensorClient.MeasurementData(
@@ -992,15 +1069,18 @@ class BleLiveConnectionService : Service() {
                 pm10 = pm10,
                 obstructed = obstructed,
                 timeValid = timeValid,
-                temperature = if (temperature != null && !temperature.isNaN() && temperature in -50f..100f) temperature else null,
-                humidity = if (humidity != null && !humidity.isNaN() && humidity in 0f..100f) humidity else null,
-                pressure = if (pressure != null && !pressure.isNaN() && pressure in 30000f..120000f) (pressure / 100) else null,
-                iaq = if (iaq != null && !iaq.isNaN() && iaq in 0f..500f) iaq else null,
-                gasResistance = if (gasResistance != null && !gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
-                iaqAccuracy = iaqAccuracy
+                temperature = if (!temperature.isNaN() && temperature in -50f..100f) temperature else null,
+                humidity = if (!humidity.isNaN() && humidity in 0f..100f) humidity else null,
+                pressure = if (!pressure.isNaN() && pressure in 30000f..120000f) (pressure / 100) else null,
+                iaq = if (!iaq.isNaN() && iaq in 0f..500f) iaq else null,
+                gasResistance = if (!gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
+                iaqAccuracy = iaqAccuracy,
+                gasResistanceProfile = gasResistanceProfile,
+                gasResistanceArray = if (gasResistanceProfile > 0) gasResistanceArray else null
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing measurement data", e)
+            Log.e(TAG, "❌ Error parsing measurement data", e)
+            e.printStackTrace()
             return null
         }
     }

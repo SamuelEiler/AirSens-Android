@@ -319,6 +319,26 @@
 
             </LinearLayout>
 
+            <!-- Gas Resistance Profile Chart (Time Slider + Heater Profiles 1-10) -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Gas Resistance Heater Profiles"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#2C3E50"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:background="#E8F4F8" />
+
+            <com.airsens.monitor.GasProfileChart
+                android:id="@+id/gasProfileChart"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@android:color/white"
+                android:elevation="2dp"
+                android:layout_marginBottom="8dp" />
+
             <!-- Particle Matter History Chart -->
             <TextView
                 android:layout_width="match_parent"

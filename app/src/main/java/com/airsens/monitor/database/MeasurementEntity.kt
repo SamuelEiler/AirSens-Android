@@ -28,5 +28,9 @@ data class MeasurementEntity(
     // Air Quality
     val iaq: Float?,
     val gasResistance: Float?,
-    val iaqAccuracy: Int
+    val iaqAccuracy: Int,
+
+    // Gas Resistance Profile (Heater temperatures 1-10)
+    val gasResistanceProfile: Int = 0,  // 0 = no profile, 1+ = profile index
+    val gasResistanceArray: String? = null  // JSON-serialized IntArray of 10 values
 )

@@ -17,6 +17,7 @@ import androidx.work.WorkerParameters
 import com.airsens.monitor.database.AppDatabase
 import com.airsens.monitor.database.MeasurementEntity
 import kotlinx.coroutines.*
+import org.json.JSONArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.text.SimpleDateFormat
@@ -279,6 +280,12 @@ class SensorSyncWorker(
         if (accumulatedMeasurements.isNotEmpty()) {
             Log.i(TAG, "Saving ${accumulatedMeasurements.size} measurements")
             val entities = accumulatedMeasurements.map { m ->
+                val gasResistanceArrayJson = if (m.gasResistanceArray != null) {
+                    JSONArray(m.gasResistanceArray.toList()).toString()
+                } else {
+                    null
+                }
+
                 MeasurementEntity(
                     timestamp = m.timestamp,
                     receivedAt = System.currentTimeMillis(),
@@ -292,7 +299,9 @@ class SensorSyncWorker(
                     pressure = m.pressure,
                     iaq = m.iaq,
                     gasResistance = m.gasResistance,
-                    iaqAccuracy = m.iaqAccuracy
+                    iaqAccuracy = m.iaqAccuracy,
+                    gasResistanceProfile = m.gasResistanceProfile,
+                    gasResistanceArray = gasResistanceArrayJson
                 )
             }
             database.measurementDao().insertAll(entities)

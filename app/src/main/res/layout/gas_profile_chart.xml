@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="8dp"
+    android:background="@android:color/white">
+
+    <com.github.mikephil.charting.charts.BarChart
+        android:id="@+id/gasProfileBarChart"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/gasProfileNoDataText"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:gravity="center"
+        android:text="No gas resistance profile data available"
+        android:textSize="14sp"
+        android:textColor="#999999"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/gasProfileTimeLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Time: --:--:--"
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:gravity="center"
+        android:layout_marginBottom="4dp" />
+
+    <SeekBar
+        android:id="@+id/gasProfileTimeSlider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="8dp"
+        android:progress="0"
+        android:max="100" />
+
+</LinearLayout>

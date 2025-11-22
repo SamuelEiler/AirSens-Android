@@ -22,6 +22,7 @@ import androidx.core.app.NotificationCompat
 import com.airsens.monitor.database.AppDatabase
 import com.airsens.monitor.database.MeasurementEntity
 import kotlinx.coroutines.*
+import org.json.JSONArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.*
@@ -84,55 +85,70 @@ class BulkDataParser {
      * [42-81]: gas_resistance_array[10] (int32_t[10]) - 4 bytes per element
      */
     fun parseMeasurement(data: ByteArray): AirQualitySensorClient.MeasurementData? {
-        if (data.size < 40) {
-            Log.e(TAG, "Packet too small: ${data.size} bytes (need at least 40 for measurement_record_t)")
+        // Expected 89-byte fixed structure (no variable length)
+        if (data.size < 89) {
+            Log.e(TAG, "❌ Packet too small: ${data.size} bytes (expected 89)")
             return null
         }
 
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Parse core measurement fields (same as before)
-            val timestamp = buffer.getInt(0).toLong() and 0xFFFFFFFFL
-            val pm10 = buffer.getFloat(4)
-            val pm25 = buffer.getFloat(8)
-            val pm1 = buffer.getFloat(12)
-            val obstructed = buffer.get(16).toInt() != 0
-            val timeValid = buffer.get(17).toInt() != 0
-            val iaqAccuracy = buffer.get(18).toInt() and 0xFF
-            val temperature = buffer.getFloat(20)
-            val humidity = buffer.getFloat(24)
-            val pressure = buffer.getFloat(28)
-            val iaq = buffer.getFloat(32)
-            val gasResistance = buffer.getFloat(36)
+            Log.d(TAG, "🔍 Parsing 89-byte BLE measurement")
 
-            // Parse gas profile data if packet is large enough
-            var gasResistanceProfile = 0
-            var gasResistanceArray: IntArray? = null
+            // Parse fixed 89-byte structure:
+            // [0-3]:    timestamp (uint32_t)
+            // [4-7]:    pm10 (float)
+            // [8-11]:   pm25 (float)
+            // [12-15]:  pm1 (float)
+            // [16]:     obstructed (uint8_t)
+            // [17]:     time_valid (uint8_t)
+            // [18]:     iaq_accuracy (uint8_t)
+            // [19]:     reserved1 (skip)
+            // [20-23]:  temperature (float)
+            // [24-27]:  humidity (float)
+            // [28-31]:  pressure (float)
+            // [32-35]:  iaq (float)
+            // [36-39]:  gas_resistance (float)
+            // [40]:     gas_resistance_profile (uint8_t)
+            // [41]:     reserved2 (skip)
+            // [42-81]:  gas_resistance_array[10] (int32_t[10])
 
-            if (data.size >= 42) {
-                gasResistanceProfile = buffer.get(40).toInt() and 0xFF
+            val timestamp = buffer.int.toLong() and 0xFFFFFFFFL
+            val pm10 = buffer.float
+            val pm25 = buffer.float
+            val pm1 = buffer.float
 
-                // Parse gas resistance array if profile index > 0
-                // Array is now 10 int32_t values (40 bytes total: 42 to 81)
-                if (gasResistanceProfile > 0 && data.size >= 82) {
-                    try {
-                        gasResistanceArray = IntArray(10)
+            val obstructed = buffer.get().toInt() != 0
+            val timeValid = buffer.get().toInt() != 0
+            val iaqAccuracy = buffer.get().toInt() and 0xFF
+            buffer.get()  // Skip reserved1
 
-                        for (i in 0 until 10) {
-                            val offset = 42 + (i * 4)  // 4 bytes per int32_t
-                            if (offset + 3 < data.size) {
-                                gasResistanceArray[i] = buffer.getInt(offset)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not parse gas resistance array", e)
-                    }
-                }
+            val temperature = buffer.float
+            val humidity = buffer.float
+            val pressure = buffer.float
+            val iaq = buffer.float
+            val gasResistance = buffer.float
+
+            val gasResistanceProfile = buffer.get().toInt() and 0xFF
+            buffer.get()  // Skip reserved2
+
+            // Parse gas resistance array (10 int32_t values)
+            val gasResistanceArray = IntArray(10) { buffer.int }
+
+            Log.d(TAG, "🌡️ Parsed: PM10=$pm10, PM2.5=$pm25, PM1=$pm1")
+            Log.d(TAG, "🌡️ Temp=${temperature}°C, Humidity=$humidity%, Pressure=$pressure Pa")
+            Log.d(TAG, "🌡️ IAQ=$iaq, Gas=$gasResistance Ω")
+
+            if (gasResistanceProfile > 0) {
+                Log.i(TAG, "✓ GAS RESISTANCE ARRAY RECEIVED (profile=$gasResistanceProfile):")
+                val arrayStr = gasResistanceArray.joinToString(", ", "[", "]")
+                Log.i(TAG, "  Values: $arrayStr")
+                Log.d(TAG, "  T0=${gasResistanceArray[0]}, T1=${gasResistanceArray[1]}, T2=${gasResistanceArray[2]}, T3=${gasResistanceArray[3]}, T4=${gasResistanceArray[4]}")
+                Log.d(TAG, "  T5=${gasResistanceArray[5]}, T6=${gasResistanceArray[6]}, T7=${gasResistanceArray[7]}, T8=${gasResistanceArray[8]}, T9=${gasResistanceArray[9]}")
+            } else {
+                Log.d(TAG, "⚠️ No gas profile data (profile=0)")
             }
-
-            Log.d(TAG, "Parsed measurement: ts=$timestamp, PM1=$pm1, PM2.5=$pm25, PM10=$pm10, temp=$temperature°C" +
-                (if (gasResistanceProfile > 0) ", gas_profile=$gasResistanceProfile" else ""))
 
             return AirQualitySensorClient.MeasurementData(
                 timestamp = timestamp,
@@ -143,15 +159,16 @@ class BulkDataParser {
                 timeValid = timeValid,
                 temperature = if (!temperature.isNaN() && temperature in -50f..100f) temperature else null,
                 humidity = if (!humidity.isNaN() && humidity in 0f..100f) humidity else null,
-                pressure = if (!pressure.isNaN() && pressure > 0) pressure else null,
-                iaq = if (!iaq.isNaN() && iaq >= 0) iaq else null,
+                pressure = if (!pressure.isNaN() && pressure in 30000f..120000f) (pressure / 100) else null,
+                iaq = if (!iaq.isNaN() && iaq in 0f..500f) iaq else null,
                 gasResistance = if (!gasResistance.isNaN() && gasResistance > 0) gasResistance else null,
                 iaqAccuracy = iaqAccuracy,
                 gasResistanceProfile = gasResistanceProfile,
-                gasResistanceArray = gasResistanceArray
+                gasResistanceArray = if (gasResistanceProfile > 0) gasResistanceArray else null
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing measurement", e)
+            Log.e(TAG, "❌ Error parsing measurement", e)
+            e.printStackTrace()
             return null
         }
     }
@@ -373,6 +390,12 @@ class BlePeriodicService : Service() {
 
                     // 5. Store all measurements in database
                     val entities = measurements.map { measurement ->
+                        val gasResistanceArrayJson = if (measurement.gasResistanceArray != null) {
+                            JSONArray(measurement.gasResistanceArray.toList()).toString()
+                        } else {
+                            null
+                        }
+
                         MeasurementEntity(
                             timestamp = measurement.timestamp,
                             receivedAt = System.currentTimeMillis(),
@@ -386,7 +409,9 @@ class BlePeriodicService : Service() {
                             pressure = measurement.pressure,
                             iaq = measurement.iaq,
                             gasResistance = measurement.gasResistance,
-                            iaqAccuracy = measurement.iaqAccuracy
+                            iaqAccuracy = measurement.iaqAccuracy,
+                            gasResistanceProfile = measurement.gasResistanceProfile,
+                            gasResistanceArray = gasResistanceArrayJson
                         )
                     }
 
@@ -623,22 +648,25 @@ class BlePeriodicService : Service() {
                 characteristic: BluetoothGattCharacteristic,
                 value: ByteArray
             ) {
-                Log.d(TAG, "onCharacteristicChanged (API 33+): UUID=${characteristic.uuid}, ${value.size} bytes")
+                Log.i(TAG, "=== onCharacteristicChanged (API 33+) ===")
+                Log.i(TAG, "UUID: ${characteristic.uuid}")
+                Log.i(TAG, "Data size: ${value.size} bytes")
+                val hexPreview = value.take(32).joinToString(" ") { "%02X".format(it) }
+                Log.i(TAG, "First 32 bytes (hex): $hexPreview")
 
                 when (characteristic.uuid) {
                     TIME_REQUEST_UUID -> {
-                        Log.i(TAG, "ESP32 requesting time sync via indication on TIME_REQUEST")
+                        Log.i(TAG, "✓ TIME_REQUEST indication received - ESP32 requesting time sync")
                         serviceScope.launch {
                             sendTimeSync(gatt)
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        // Bulk data notification received (no ACK required)
-                        Log.d(TAG, ">>> NOTIFICATION RECEIVED: ${value.size} bytes")
+                        Log.i(TAG, "✓ DATA_RESPONSE notification received (${value.size} bytes)")
                         handleBulkDataChunk(value)
                     }
                     else -> {
-                        Log.d(TAG, "Unhandled characteristic changed: ${characteristic.uuid}")
+                        Log.w(TAG, "⚠️ Unhandled characteristic UUID: ${characteristic.uuid}")
                     }
                 }
             }
@@ -649,25 +677,30 @@ class BlePeriodicService : Service() {
                 gatt: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic
             ) {
-                Log.d(TAG, "onCharacteristicChanged (deprecated): UUID=${characteristic.uuid}")
+                Log.i(TAG, "=== onCharacteristicChanged (DEPRECATED API) ===")
+                val value = characteristic.value
+                Log.i(TAG, "UUID: ${characteristic.uuid}")
+                Log.i(TAG, "Data size: ${value?.size ?: 0} bytes")
+                if (value != null) {
+                    val hexPreview = value.take(32).joinToString(" ") { "%02X".format(it) }
+                    Log.i(TAG, "First 32 bytes (hex): $hexPreview")
+                }
 
                 when (characteristic.uuid) {
                     TIME_REQUEST_UUID -> {
-                        Log.i(TAG, "ESP32 requesting time sync via indication on TIME_REQUEST (deprecated)")
+                        Log.i(TAG, "✓ TIME_REQUEST indication received (deprecated) - ESP32 requesting time sync")
                         serviceScope.launch {
                             sendTimeSync(gatt)
                         }
                     }
                     DATA_RESPONSE_UUID -> {
-                        // Bulk data notification received (no ACK required)
-                        val value = characteristic.value
-                        Log.d(TAG, ">>> NOTIFICATION RECEIVED (deprecated): ${value?.size ?: 0} bytes")
+                        Log.i(TAG, "✓ DATA_RESPONSE notification received (deprecated) (${value?.size ?: 0} bytes)")
                         if (value != null) {
                             handleBulkDataChunk(value)
                         }
                     }
                     else -> {
-                        Log.d(TAG, "Unhandled characteristic changed: ${characteristic.uuid}")
+                        Log.w(TAG, "⚠️ Unhandled characteristic UUID: ${characteristic.uuid}")
                     }
                 }
             }
@@ -1099,8 +1132,22 @@ class BlePeriodicService : Service() {
      * No reassembly needed - each packet is a complete measurement
      */
     private fun handleBulkDataChunk(data: ByteArray) {
+        // ===== DEBUG: Log all received BLE data =====
+        Log.i(TAG, ">>> BLE DATA RECEIVED: ${data.size} bytes")
+        val hexString = data.joinToString(" ") { "%02X".format(it) }
+        Log.d(TAG, "    Hex: $hexString")
+
+        // Check if it looks like a valid measurement (should be 82+ bytes for gas profile data)
+        if (data.size < 40) {
+            Log.w(TAG, "    ⚠️ WARNING: Packet too small (${data.size} bytes, expected at least 40)")
+        } else if (data.size < 82) {
+            Log.w(TAG, "    ⚠️ WARNING: No gas profile data (${data.size} bytes, need 82 for full data)")
+        } else if (data.size >= 82) {
+            Log.i(TAG, "    ✓ Full packet with gas profile (${data.size} bytes)")
+        }
+
         val parsed = bulkDataParser.parsePacket(data) ?: run {
-            Log.e(TAG, "Failed to parse data packet")
+            Log.e(TAG, "❌ Failed to parse data packet")
             return
         }
 

@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
 
     // Chart views (MPAndroidChart)
     private lateinit var gasResistanceChart: BarChart
+    private lateinit var gasProfileChart: GasProfileChart
     private lateinit var particleMatterChart: LineChart
     private lateinit var tempHumidityChart: LineChart
 
@@ -82,6 +83,9 @@ class MainActivity : AppCompatActivity() {
     private val pm1Data = mutableListOf<Pair<Long, Float>>()
     private val temperatureData = mutableListOf<Pair<Long, Float>>()
     private val humidityData = mutableListOf<Pair<Long, Float>>()
+
+    // All measurements for profile chart
+    private val allMeasurements = mutableListOf<com.airsens.monitor.database.MeasurementEntity>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -122,6 +126,7 @@ class MainActivity : AppCompatActivity() {
 
         // Chart views
         gasResistanceChart = findViewById(R.id.gasResistanceChart)
+        gasProfileChart = findViewById(R.id.gasProfileChart)
         particleMatterChart = findViewById(R.id.particleMatterChart)
         tempHumidityChart = findViewById(R.id.tempHumidityChart)
 
@@ -249,6 +254,8 @@ class MainActivity : AppCompatActivity() {
         fullTemperatureData.clear()
         fullHumidityData.clear()
         fullGasResistanceData.clear()
+        allMeasurements.clear()
+        allMeasurements.addAll(measurements)
 
         if (measurements.isEmpty()) {
             return
@@ -353,6 +360,7 @@ class MainActivity : AppCompatActivity() {
 
         // Set initial empty data
         updateGasResistanceChart()
+        updateGasProfileChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
     }
@@ -498,6 +506,11 @@ class MainActivity : AppCompatActivity() {
         gasResistanceChart.invalidate()
 
         Log.d(TAG, "✓ Gas resistance chart updated successfully")
+    }
+
+    private fun updateGasProfileChart() {
+        Log.d(TAG, "📊 Updating gas profile chart with ${allMeasurements.size} measurements")
+        gasProfileChart.updateData(allMeasurements)
     }
 
     private fun updateParticleMatterChart() {
@@ -862,6 +875,7 @@ class MainActivity : AppCompatActivity() {
 
         // Update all charts with filtered data
         updateGasResistanceChart()
+        updateGasProfileChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
 
@@ -890,6 +904,7 @@ class MainActivity : AppCompatActivity() {
 
         // Update all charts with full data
         updateGasResistanceChart()
+        updateGasProfileChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
 
