@@ -6,7 +6,7 @@
     android:padding="8dp"
     android:background="@android:color/white">
 
-    <com.github.mikephil.charting.charts.BarChart
+    <com.github.mikephil.charting.charts.RadarChart
         android:id="@+id/gasProfileBarChart"
         android:layout_width="match_parent"
         android:layout_height="280dp"
