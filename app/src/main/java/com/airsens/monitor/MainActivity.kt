@@ -63,13 +63,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var iaqAccuracyText: TextView
 
     // Chart views (MPAndroidChart)
-    private lateinit var gasResistanceChart: BarChart
+    private lateinit var iaqChart: LineChart
     private lateinit var gasProfileChart: GasProfileChart
     private lateinit var particleMatterChart: LineChart
     private lateinit var tempHumidityChart: LineChart
 
     // Full data storage (unfiltered)
-    private val fullGasResistanceData = mutableListOf<Pair<Long, Float>>()
+    private val fullIaqData = mutableListOf<Pair<Long, Float>>()
     private val fullPm10Data = mutableListOf<Pair<Long, Float>>()
     private val fullPm25Data = mutableListOf<Pair<Long, Float>>()
     private val fullPm1Data = mutableListOf<Pair<Long, Float>>()
@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
     private val fullHumidityData = mutableListOf<Pair<Long, Float>>()
 
     // Filtered data storage for charts (what's currently displayed)
-    private val gasResistanceData = mutableListOf<Pair<Long, Float>>()
+    private val iaqData = mutableListOf<Pair<Long, Float>>()
     private val pm10Data = mutableListOf<Pair<Long, Float>>()
     private val pm25Data = mutableListOf<Pair<Long, Float>>()
     private val pm1Data = mutableListOf<Pair<Long, Float>>()
@@ -125,7 +125,7 @@ class MainActivity : AppCompatActivity() {
         iaqAccuracyText = findViewById(R.id.iaqAccuracyText)
 
         // Chart views
-        gasResistanceChart = findViewById(R.id.gasResistanceChart)
+        iaqChart = findViewById(R.id.iaqChart)
         gasProfileChart = findViewById(R.id.gasProfileChart)
         particleMatterChart = findViewById(R.id.particleMatterChart)
         tempHumidityChart = findViewById(R.id.tempHumidityChart)
@@ -253,7 +253,7 @@ class MainActivity : AppCompatActivity() {
         fullPm1Data.clear()
         fullTemperatureData.clear()
         fullHumidityData.clear()
-        fullGasResistanceData.clear()
+        fullIaqData.clear()
         allMeasurements.clear()
         allMeasurements.addAll(measurements)
 
@@ -277,13 +277,13 @@ class MainActivity : AppCompatActivity() {
                 fullHumidityData.add(Pair(timestamp, it))
             }
 
-            measurement.gasResistance?.let {
-                fullGasResistanceData.add(Pair(timestamp, it))
+            measurement.iaq?.let {
+                fullIaqData.add(Pair(timestamp, it))
             }
         }
 
         // Log chart data counts
-        Log.d(TAG, "📈 Chart data loaded: Gas=${fullGasResistanceData.size}, " +
+        Log.d(TAG, "📈 Chart data loaded: IAQ=${fullIaqData.size}, " +
                 "PM10=${fullPm10Data.size}, PM2.5=${fullPm25Data.size}, " +
                 "Temp=${fullTemperatureData.size}, Humidity=${fullHumidityData.size}")
 
@@ -349,8 +349,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeCharts() {
-        // Configure Gas Resistance Chart (Bar Chart)
-        configureBarChart(gasResistanceChart, "Gas Resistance (Ω)")
+        // Configure IAQ Chart (Line Chart)
+        configureLineChart(iaqChart, "IAQ (Indoor Air Quality Index)")
 
         // Configure Particle Matter Chart (Line Chart with 3 series)
         configureLineChart(particleMatterChart, "Particle Matter (µg/m³)")
@@ -359,7 +359,7 @@ class MainActivity : AppCompatActivity() {
         configureLineChart(tempHumidityChart, "Temperature (°C) / Humidity (%)")
 
         // Set initial empty data
-        updateGasResistanceChart()
+        updateIaqChart()
         updateGasProfileChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
@@ -467,45 +467,54 @@ class MainActivity : AppCompatActivity() {
         chart.legend.setDrawInside(true)
     }
 
-    private fun updateGasResistanceChart() {
-        if (gasResistanceData.isEmpty()) {
-            Log.w(TAG, "⚠️ Gas resistance chart: No data to display")
-            gasResistanceChart.clear()
-            gasResistanceChart.invalidate()
+    private fun updateIaqChart() {
+        // Limit data points
+        while (iaqData.size > MAX_CHART_ENTRIES) iaqData.removeAt(0)
+
+        if (iaqData.isEmpty()) {
+            Log.w(TAG, "⚠️ IAQ chart: No data to display")
+            iaqChart.clear()
+            iaqChart.invalidate()
             return
         }
 
-        Log.d(TAG, "📊 Updating gas resistance chart with ${gasResistanceData.size} points")
+        Log.d(TAG, "📊 Updating IAQ chart with ${iaqData.size} points")
 
-        // Save current viewport state to preserve user's view
-        val hadData = gasResistanceChart.data != null && gasResistanceChart.data.entryCount > 0
-        val savedLowestVisibleX = if (hadData) gasResistanceChart.lowestVisibleX else null
-        val savedHighestVisibleX = if (hadData) gasResistanceChart.highestVisibleX else null
-
-        val entries = gasResistanceData.sortedBy { it.first }.map { (timestamp, value) ->
-            BarEntry(timestamp.toFloat(), value)
+        val entries = iaqData.sortedBy { it.first }.mapIndexed { index, (timestamp, value) ->
+            Entry(index.toFloat(), value)
         }
 
-        // Always recreate dataset to ensure clean update
-        val dataSet = BarDataSet(entries, "Gas Resistance")
-        dataSet.color = Color.rgb(104, 241, 175)
+        val dataSet = LineDataSet(entries, "IAQ")
+        dataSet.color = Color.rgb(255, 152, 0)  // Orange
+        dataSet.setCircleColor(Color.rgb(255, 152, 0))
+        dataSet.circleRadius = 3f
+        dataSet.lineWidth = 2f
+        dataSet.setDrawValues(false)
+        dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
         dataSet.valueTextColor = Color.BLACK
         dataSet.valueTextSize = 9f
-        val barData = BarData(dataSet)
-        gasResistanceChart.data = barData
 
-        // Restore viewport if user was viewing data, otherwise show latest data
-        if (hadData && savedLowestVisibleX != null && savedHighestVisibleX != null) {
-            // Preserve user's current view
-            gasResistanceChart.moveViewToX(savedLowestVisibleX)
-        } else {
-            // First load: show the most recent data
-            gasResistanceChart.moveViewToX(entries.last().x)
+        val dataSets = listOf<ILineDataSet>(dataSet)
+        val lineData = LineData(dataSets)
+        iaqChart.data = lineData
+
+        // Configure X-axis
+        iaqChart.xAxis.apply {
+            valueFormatter = object : ValueFormatter() {
+                override fun getFormattedValue(value: Float): String {
+                    val index = value.toInt()
+                    if (index >= 0 && index < iaqData.size) {
+                        val timestamp = iaqData[index].first
+                        val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                        return sdf.format(java.util.Date(timestamp * 1000))
+                    }
+                    return ""
+                }
+            }
         }
 
-        gasResistanceChart.invalidate()
-
-        Log.d(TAG, "✓ Gas resistance chart updated successfully")
+        iaqChart.invalidate()
+        Log.d(TAG, "✓ IAQ chart updated successfully")
     }
 
     private fun updateGasProfileChart() {
@@ -838,14 +847,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun clearChartData() {
-        gasResistanceData.clear()
+        iaqData.clear()
         pm10Data.clear()
         pm25Data.clear()
         pm1Data.clear()
         temperatureData.clear()
         humidityData.clear()
 
-        updateGasResistanceChart()
+        updateIaqChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
     }
@@ -855,8 +864,8 @@ class MainActivity : AppCompatActivity() {
         val oneHourAgo = now - 3600 // 1 hour = 3600 seconds
 
         // Filter all data to last hour
-        gasResistanceData.clear()
-        gasResistanceData.addAll(fullGasResistanceData.filter { it.first >= oneHourAgo })
+        iaqData.clear()
+        iaqData.addAll(fullIaqData.filter { it.first >= oneHourAgo })
 
         pm10Data.clear()
         pm10Data.addAll(fullPm10Data.filter { it.first >= oneHourAgo })
@@ -874,7 +883,7 @@ class MainActivity : AppCompatActivity() {
         humidityData.addAll(fullHumidityData.filter { it.first >= oneHourAgo })
 
         // Update all charts with filtered data
-        updateGasResistanceChart()
+        updateIaqChart()
         updateGasProfileChart()
         updateParticleMatterChart()
         updateTempHumidityChart()
@@ -884,8 +893,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAllChartData() {
         // Copy all full data to filtered data
-        gasResistanceData.clear()
-        gasResistanceData.addAll(fullGasResistanceData)
+        iaqData.clear()
+        iaqData.addAll(fullIaqData)
 
         pm10Data.clear()
         pm10Data.addAll(fullPm10Data)
@@ -903,7 +912,7 @@ class MainActivity : AppCompatActivity() {
         humidityData.addAll(fullHumidityData)
 
         // Update all charts with full data
-        updateGasResistanceChart()
+        updateIaqChart()
         updateGasProfileChart()
         updateParticleMatterChart()
         updateTempHumidityChart()

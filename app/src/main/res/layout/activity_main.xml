@@ -281,19 +281,18 @@
 
             </LinearLayout>
 
-            <!-- Gas Profile Section -->
+            <!-- IAQ History Chart -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/gas_profile"
+                android:text="IAQ History"
                 android:textSize="18sp"
                 android:textStyle="bold"
                 android:textColor="#2C3E50"
                 android:paddingTop="8dp"
                 android:paddingBottom="8dp"
-                android:background="#F8E8F8" />
+                android:background="#FFF4E8" />
 
-            <!-- Gas Resistance Bar Chart -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -303,19 +302,10 @@
                 android:elevation="2dp"
                 android:layout_marginBottom="8dp">
 
-                <TextView
+                <com.github.mikephil.charting.charts.LineChart
+                    android:id="@+id/iaqChart"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Gas Resistance by Temperature"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:textColor="#2C3E50"
-                    android:paddingBottom="8dp" />
-
-                <com.github.mikephil.charting.charts.BarChart
-                    android:id="@+id/gasResistanceChart"
-                    android:layout_width="match_parent"
-                    android:layout_height="200dp" />
+                    android:layout_height="250dp" />
 
             </LinearLayout>
 
