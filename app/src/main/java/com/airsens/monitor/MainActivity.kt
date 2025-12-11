@@ -543,43 +543,35 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateIaqChart() {
-        // Limit data points
         while (iaqData.size > MAX_CHART_ENTRIES) iaqData.removeAt(0)
-
-        if (iaqData.isEmpty()) {
-            iaqChart.clear()
-            iaqChart.invalidate()
-            return
-        }
-
-        val hadData = iaqChart.data != null && iaqChart.data.entryCount > 0
-        val savedLowestVisibleX = if (hadData) iaqChart.lowestVisibleX else null
 
         val entries = iaqData.sortedBy { it.first }.map { (timestamp, value) ->
             Entry(timestamp.toFloat(), value)
         }
 
-        val dataSet = LineDataSet(entries, "IAQ")
-        dataSet.color = Color.rgb(255, 152, 0)  // Orange
-        dataSet.setCircleColor(Color.rgb(255, 152, 0))
-        dataSet.lineWidth = 2f
-        dataSet.circleRadius = 1.5f
-        dataSet.setDrawValues(false)
-        dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
+        if (iaqChart.data == null) {
+            val dataSet = LineDataSet(entries, "IAQ").apply {
+                color = Color.rgb(255, 152, 0)  // Orange
+                setCircleColor(color)
+                lineWidth = 2f
+                circleRadius = 1.5f
+                setDrawValues(false)
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+            }
+            iaqChart.data = LineData(dataSet)
+        } else {
+            val dataSet = iaqChart.data.getDataSetByLabel("IAQ", true) as LineDataSet
+            dataSet.clear()
+            entries.forEach { dataSet.addEntryOrdered(it) }
+            iaqChart.data.notifyDataChanged()
+            iaqChart.notifyDataSetChanged()
+        }
 
-        iaqChart.data = LineData(dataSet)
-
-        // The X-axis formatter is now handled by the generic configureLineChart function,
-        // so no need to set it here anymore.
-
-        if (hadData && savedLowestVisibleX != null) {
-            iaqChart.moveViewToX(savedLowestVisibleX)
-        } else if (entries.isNotEmpty()) {
-            iaqChart.moveViewToX(entries.last().x)
+        if (iaqChart.viewPortHandler.scaleX <= 1f) {
+            entries.lastOrNull()?.let { iaqChart.moveViewToX(it.x) }
         }
 
         iaqChart.invalidate()
-        Log.d(TAG, "✓ IAQ chart updated successfully")
     }
 
     private fun updateGasProfileChart() {
@@ -588,132 +580,113 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateParticleMatterChart() {
-        // Limit data points
         while (pm10Data.size > MAX_CHART_ENTRIES) pm10Data.removeAt(0)
         while (pm25Data.size > MAX_CHART_ENTRIES) pm25Data.removeAt(0)
         while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
 
-        if (pm10Data.isEmpty() && pm25Data.isEmpty() && pm1Data.isEmpty()) {
-            particleMatterChart.clear()
-            particleMatterChart.invalidate()
-            return
-        }
+        val pm10Entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+        val pm25Entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+        val pm1Entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
 
-        val hadData = particleMatterChart.data != null && particleMatterChart.data.entryCount > 0
-        val savedLowestVisibleX = if (hadData) particleMatterChart.lowestVisibleX else null
-
-        val dataSets = mutableListOf<ILineDataSet>()
-        var lastX = 0f
-
-        if (pm10Data.isNotEmpty()) {
-            val entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-            val dataSet = LineDataSet(entries, "PM10 (µg/m³)")
-            dataSet.color = Color.rgb(255, 99, 71) // Tomato
-            dataSet.setCircleColor(dataSet.color)
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 1.5f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            if (entries.isNotEmpty()) lastX = entries.last().x
-        }
-
-        if (pm25Data.isNotEmpty()) {
-            val entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-            val dataSet = LineDataSet(entries, "PM2.5 (µg/m³)")
-            dataSet.color = Color.rgb(255, 165, 0) // Orange
-            dataSet.setCircleColor(dataSet.color)
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 1.5f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            if (entries.isNotEmpty() && entries.last().x > lastX) lastX = entries.last().x
-        }
-
-        if (pm1Data.isNotEmpty()) {
-            val entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-            val dataSet = LineDataSet(entries, "PM1.0 (µg/m³)")
-            dataSet.color = Color.rgb(135, 206, 250) // Light Sky Blue
-            dataSet.setCircleColor(dataSet.color)
-            dataSet.lineWidth = 2f
-            dataSet.circleRadius = 1.5f
-            dataSet.setDrawValues(false)
-            dataSets.add(dataSet)
-            if (entries.isNotEmpty() && entries.last().x > lastX) lastX = entries.last().x
-        }
-
-        particleMatterChart.data = LineData(dataSets)
-
-        if (hadData && savedLowestVisibleX != null) {
-            particleMatterChart.moveViewToX(savedLowestVisibleX)
+        if (particleMatterChart.data == null) {
+            val dataSets = mutableListOf<ILineDataSet>()
+            dataSets.add(LineDataSet(pm10Entries, "PM10 (µg/m³)") .apply {
+                color = Color.rgb(255, 99, 71) // Tomato
+                setCircleColor(color)
+                lineWidth = 2f
+                circleRadius = 1.5f
+                setDrawValues(false)
+            })
+            dataSets.add(LineDataSet(pm25Entries, "PM2.5 (µg/m³)") .apply {
+                color = Color.rgb(255, 165, 0) // Orange
+                setCircleColor(color)
+                lineWidth = 2f
+                circleRadius = 1.5f
+                setDrawValues(false)
+            })
+            dataSets.add(LineDataSet(pm1Entries, "PM1.0 (µg/m³)") .apply {
+                color = Color.rgb(135, 206, 250) // Light Sky Blue
+                setCircleColor(color)
+                lineWidth = 2f
+                circleRadius = 1.5f
+                setDrawValues(false)
+            })
+            particleMatterChart.data = LineData(dataSets)
         } else {
-            particleMatterChart.moveViewToX(lastX)
+            val pm10DataSet = particleMatterChart.data.getDataSetByLabel("PM10 (µg/m³)", true) as LineDataSet
+            val pm25DataSet = particleMatterChart.data.getDataSetByLabel("PM2.5 (µg/m³)", true) as LineDataSet
+            val pm1DataSet = particleMatterChart.data.getDataSetByLabel("PM1.0 (µg/m³)", true) as LineDataSet
+
+            pm10DataSet.clear()
+            pm25DataSet.clear()
+            pm1DataSet.clear()
+
+            pm10Entries.forEach { pm10DataSet.addEntryOrdered(it) }
+            pm25Entries.forEach { pm25DataSet.addEntryOrdered(it) }
+            pm1Entries.forEach { pm1DataSet.addEntryOrdered(it) }
+
+            particleMatterChart.data.notifyDataChanged()
+            particleMatterChart.notifyDataSetChanged()
+        }
+
+        if (particleMatterChart.viewPortHandler.scaleX <= 1f) {
+            val lastX = pm10Entries.lastOrNull()?.x ?: pm25Entries.lastOrNull()?.x ?: pm1Entries.lastOrNull()?.x ?: 0f
+            if (lastX > 0f) {
+                particleMatterChart.moveViewToX(lastX)
+            }
         }
 
         particleMatterChart.invalidate()
-        Log.d(TAG, "✓ Particle matter chart updated successfully")
     }
 
     private fun updateTempHumidityChart() {
-        // Limit data points
         while (temperatureData.size > MAX_CHART_ENTRIES) temperatureData.removeAt(0)
         while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
 
-        if (temperatureData.isEmpty() && humidityData.isEmpty()) {
-            tempHumidityChart.clear()
-            tempHumidityChart.invalidate()
-            return
+        val tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+        val humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
+
+        if (tempHumidityChart.data == null) {
+            val dataSets = mutableListOf<ILineDataSet>()
+            dataSets.add(LineDataSet(tempEntries, "Temperature (°C)").apply {
+                color = Color.parseColor("#FF5722") // Deep Orange
+                setCircleColor(color)
+                lineWidth = 2.5f
+                circleRadius = 1.5f
+                setDrawValues(false)
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+            })
+            dataSets.add(LineDataSet(humEntries, "Humidity (%)").apply {
+                color = Color.parseColor("#2196F3") // Blue
+                setCircleColor(color)
+                lineWidth = 2.5f
+                circleRadius = 1.5f
+                setDrawValues(false)
+                mode = LineDataSet.Mode.CUBIC_BEZIER
+            })
+            tempHumidityChart.data = LineData(dataSets)
+        } else {
+            val tempDataSet = tempHumidityChart.data.getDataSetByLabel("Temperature (°C)", true) as LineDataSet
+            val humDataSet = tempHumidityChart.data.getDataSetByLabel("Humidity (%)", true) as LineDataSet
+
+            tempDataSet.clear()
+            humDataSet.clear()
+
+            tempEntries.forEach { tempDataSet.addEntryOrdered(it) }
+            humEntries.forEach { humDataSet.addEntryOrdered(it) }
+
+            tempHumidityChart.data.notifyDataChanged()
+            tempHumidityChart.notifyDataSetChanged()
         }
 
-        // Save viewport state to preserve user's zoom/pan
-        val hadData = tempHumidityChart.data != null && tempHumidityChart.data.entryCount > 0
-        val savedLowestVisibleX = if (hadData) tempHumidityChart.lowestVisibleX else null
-
-        val dataSets = mutableListOf<ILineDataSet>()
-        var lastX = 0f
-
-        // Temperature dataset
-        if (temperatureData.isNotEmpty()) {
-            val tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
+        if (tempHumidityChart.viewPortHandler.scaleX <= 1f) {
+            val lastX = tempEntries.lastOrNull()?.x ?: humEntries.lastOrNull()?.x ?: 0f
+            if (lastX > 0f) {
+                tempHumidityChart.moveViewToX(lastX)
             }
-            val tempDataSet = LineDataSet(tempEntries, "Temperature (°C)")
-            tempDataSet.color = Color.parseColor("#FF5722") // Deep Orange
-            tempDataSet.setCircleColor(Color.parseColor("#FF5722"))
-            tempDataSet.lineWidth = 2.5f
-            tempDataSet.circleRadius = 1.5f
-            tempDataSet.setDrawValues(false)
-            tempDataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
-            dataSets.add(tempDataSet)
-            if (tempEntries.isNotEmpty()) lastX = tempEntries.last().x
-        }
-
-        // Humidity dataset
-        if (humidityData.isNotEmpty()) {
-            val humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) ->
-                Entry(timestamp.toFloat(), value)
-            }
-            val humDataSet = LineDataSet(humEntries, "Humidity (%)")
-            humDataSet.color = Color.parseColor("#2196F3") // Blue
-            humDataSet.setCircleColor(Color.parseColor("#2196F3"))
-            humDataSet.lineWidth = 2.5f
-            humDataSet.circleRadius = 1.5f
-            humDataSet.setDrawValues(false)
-            humDataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
-            dataSets.add(humDataSet)
-            if (humEntries.isNotEmpty() && humEntries.last().x > lastX) lastX = humEntries.last().x
-        }
-
-        tempHumidityChart.data = LineData(dataSets)
-
-        // Restore viewport or move to the latest data
-        if (hadData && savedLowestVisibleX != null) {
-            tempHumidityChart.moveViewToX(savedLowestVisibleX)
-        } else if (lastX > 0) {
-            tempHumidityChart.moveViewToX(lastX)
         }
 
         tempHumidityChart.invalidate()
-        Log.d(TAG, "✓ Temp/Humidity chart updated successfully")
     }
 
     private fun clearChartData() {
