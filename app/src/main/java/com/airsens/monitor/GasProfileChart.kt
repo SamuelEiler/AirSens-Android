@@ -7,15 +7,15 @@ import android.view.LayoutInflater
 import android.widget.FrameLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import com.github.mikephil.charting.charts.RadarChart
-import com.github.mikephil.charting.data.RadarData
-import com.github.mikephil.charting.data.RadarDataSet
-import com.github.mikephil.charting.data.RadarEntry
+import com.github.mikephil.charting.charts.BarChart
+import com.github.mikephil.charting.data.BarData
+import com.github.mikephil.charting.data.BarDataSet
+import com.github.mikephil.charting.data.BarEntry
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.highlight.Highlight
 import com.github.mikephil.charting.listener.OnChartValueSelectedListener
-import com.github.mikephil.charting.interfaces.datasets.IRadarDataSet
+import com.github.mikephil.charting.interfaces.datasets.IBarDataSet
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.*
@@ -45,7 +45,7 @@ data class GasProfileDataPoint(
 
 class GasProfileChart(context: Context, attrs: AttributeSet? = null) : FrameLayout(context, attrs) {
 
-    private lateinit var radarChart: RadarChart
+    private lateinit var barChart: BarChart
     private lateinit var timeSlider: SeekBar
     private lateinit var timeLabel: TextView
     private lateinit var noDataText: TextView
@@ -70,42 +70,52 @@ class GasProfileChart(context: Context, attrs: AttributeSet? = null) : FrameLayo
     }
 
     private fun initializeViews() {
-        radarChart = findViewById(R.id.gasProfileBarChart)
+        barChart = findViewById(R.id.gasProfileBarChart)
         timeSlider = findViewById(R.id.gasProfileTimeSlider)
         timeLabel = findViewById(R.id.gasProfileTimeLabel)
         noDataText = findViewById(R.id.gasProfileNoDataText)
 
-        configureRadarChart()
+        configureBarChart()
         configureTimeSlider()
     }
 
-    private fun configureRadarChart() {
-        radarChart.description.text = "Gas Resistance by Heater Profile (1-10)"
-        radarChart.description.textSize = 12f
-        radarChart.setTouchEnabled(false)
+    private fun configureBarChart() {
+        barChart.description.text = "Gas Resistance by Heater Profile (1-10)"
+        barChart.description.textSize = 12f
+        barChart.setTouchEnabled(false)
+        barChart.setDrawGridBackground(false)
+        barChart.setPinchZoom(false)
+        barChart.setScaleEnabled(false)
+
+        // Disable interactions for profile chart
+        barChart.isDragEnabled = false
+        barChart.setScaleXEnabled(false)
+        barChart.setScaleYEnabled(false)
 
         // X-axis configuration (heater profiles 1-10)
-        val xAxis = radarChart.xAxis
-        xAxis.setDrawGridLines(true)
+        val xAxis = barChart.xAxis
+        xAxis.position = XAxis.XAxisPosition.BOTTOM
+        xAxis.setDrawGridLines(false)
         xAxis.granularity = 1f
         xAxis.valueFormatter = object : ValueFormatter() {
             override fun getFormattedValue(value: Float): String {
-                return "P${(value.toInt() % 10) + 1}"  // Profile 1-10
+                return "P${value.toInt()}"  // Profile 1-10
             }
         }
 
         // Y-axis configuration
-        radarChart.yAxis.setDrawGridLines(true)
-        radarChart.yAxis.axisMinimum = 0f
+        barChart.axisLeft.setDrawGridLines(true)
+        barChart.axisRight.isEnabled = false
+        barChart.axisLeft.axisMinimum = 0f
 
         // Legend
-        radarChart.legend.isEnabled = true
+        barChart.legend.isEnabled = false
 
         // Interactive marker
-        radarChart.setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
+        barChart.setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
             override fun onValueSelected(e: com.github.mikephil.charting.data.Entry?, h: Highlight?) {
                 if (e != null) {
-                    val profile = (e.x.toInt() % 10) + 1
+                    val profile = e.x.toInt()
                     val value = e.y.toInt()
                     android.widget.Toast.makeText(
                         context,
@@ -158,12 +168,12 @@ class GasProfileChart(context: Context, attrs: AttributeSet? = null) : FrameLayo
         if (gasProfileData.isEmpty()) {
             noDataText.text = "No gas resistance profile data available"
             noDataText.visibility = VISIBLE
-            radarChart.visibility = GONE
+            barChart.visibility = GONE
             timeSlider.visibility = GONE
             timeLabel.visibility = GONE
         } else {
             noDataText.visibility = GONE
-            radarChart.visibility = VISIBLE
+            barChart.visibility = VISIBLE
             timeSlider.visibility = VISIBLE
             timeLabel.visibility = VISIBLE
 
@@ -186,51 +196,29 @@ class GasProfileChart(context: Context, attrs: AttributeSet? = null) : FrameLayo
         val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         timeLabel.text = "Time: ${timeFormat.format(date)}"
 
-        // Normalize values to percentage (0-100) for better radar chart visualization
-        val minValue = dataPoint.gasResistanceArray.minOrNull()?.toFloat() ?: 0f
-        val maxValue = dataPoint.gasResistanceArray.maxOrNull()?.toFloat() ?: 100f
-        val range = if (maxValue > minValue) maxValue - minValue else 1f
-
-        // Create radar entries for each heater profile (1-10)
-        val entries = mutableListOf<RadarEntry>()
+        // Create bar entries for each heater profile (1-10)
+        val entries = mutableListOf<BarEntry>()
         for (i in 0 until 10) {
-            // Normalize to 0-100 percentage scale
-            val normalizedValue = if (range > 0) {
-                ((dataPoint.gasResistanceArray[i] - minValue) / range) * 100f
-            } else {
-                50f  // If all values are the same, show 50%
-            }
-            entries.add(RadarEntry(normalizedValue))
+            // X position is i (0-9), Y value is gas resistance
+            entries.add(BarEntry(i.toFloat(), dataPoint.gasResistanceArray[i].toFloat()))
         }
 
         // Create dataset with all profiles
-        val dataSet = RadarDataSet(entries, "Gas Resistance (%)")
-        dataSet.color = Color.rgb(104, 241, 175)  // Cyan/Teal
-        dataSet.fillColor = Color.rgb(104, 241, 175)
-        dataSet.setDrawFilled(true)
-        dataSet.fillAlpha = 70  // Semi-transparent fill
-        dataSet.lineWidth = 2f
-        dataSet.isDrawHighlightCircleEnabled = true
-        dataSet.setHighlightCircleInnerRadius(3f)
-        dataSet.setHighlightCircleOuterRadius(4f)
+        val dataSet = BarDataSet(entries, "Gas Resistance by Profile")
+        dataSet.setColors(*heaterColors.toIntArray())  // One color per bar
         dataSet.valueTextColor = Color.BLACK
         dataSet.valueTextSize = 9f
 
-        val radarData = RadarData(dataSet)
-        radarChart.data = radarData
+        val barData = BarData(dataSet)
+        barData.barWidth = 0.8f
+
+        barChart.data = barData
 
         // Configure X-axis for 0-9 (display as P1-P10)
-        val xAxis = radarChart.xAxis
-        xAxis.valueFormatter = object : ValueFormatter() {
-            override fun getFormattedValue(value: Float): String {
-                return "P${value.toInt() + 1}"  // Profile 1-10
-            }
-        }
+        val xAxis = barChart.xAxis
+        xAxis.axisMinimum = -0.5f
+        xAxis.axisMaximum = 9.5f
 
-        // Set Y-axis to 0-100% scale
-        radarChart.yAxis.axisMinimum = 0f
-        radarChart.yAxis.axisMaximum = 100f
-
-        radarChart.invalidate()
+        barChart.invalidate()
     }
 }
