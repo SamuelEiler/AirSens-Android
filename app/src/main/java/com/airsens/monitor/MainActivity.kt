@@ -6,27 +6,28 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
-import android.widget.*
+import android.widget.Button
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.airsens.monitor.database.AppDatabase
-import com.github.mikephil.charting.charts.BarChart
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.data.BarData
-import com.github.mikephil.charting.data.BarDataSet
-import com.github.mikephil.charting.data.BarEntry
+import com.github.mikephil.charting.components.Legend
+import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
 import com.github.mikephil.charting.formatter.ValueFormatter
-import com.github.mikephil.charting.components.XAxis
-import com.github.mikephil.charting.components.Legend
-import com.github.mikephil.charting.highlight.Highlight
-import com.github.mikephil.charting.listener.OnChartValueSelectedListener
+import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
+import com.github.mikephil.charting.listener.ChartTouchListener
+import com.github.mikephil.charting.listener.OnChartGestureListener
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -36,9 +37,10 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val REQUEST_PERMISSIONS = 2
-        private const val MAX_CHART_ENTRIES = 500 // Max data points to show in history charts
+        private const val MAX_CHART_ENTRIES = 500
     }
 
+    private var isSyncing = false
     private lateinit var database: AppDatabase
 
     // UI Components
@@ -46,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dataContainer: ScrollView
     private lateinit var lastHourButton: Button
     private lateinit var allDataButton: Button
+    private lateinit var deleteAllDataButton: Button
     private lateinit var bleConnectionStatus: TextView
     private lateinit var lastDataReceived: TextView
 
@@ -62,37 +65,31 @@ class MainActivity : AppCompatActivity() {
     private lateinit var obstructedText: TextView
     private lateinit var iaqAccuracyText: TextView
 
-    // Chart views (MPAndroidChart)
+    // Chart views
     private lateinit var iaqChart: LineChart
     private lateinit var gasProfileChart: GasProfileChart
     private lateinit var particleMatterChart: LineChart
     private lateinit var tempHumidityChart: LineChart
 
-    // Full data storage (unfiltered)
+    // Data lists
     private val fullIaqData = mutableListOf<Pair<Long, Float>>()
     private val fullPm10Data = mutableListOf<Pair<Long, Float>>()
     private val fullPm25Data = mutableListOf<Pair<Long, Float>>()
     private val fullPm1Data = mutableListOf<Pair<Long, Float>>()
     private val fullTemperatureData = mutableListOf<Pair<Long, Float>>()
     private val fullHumidityData = mutableListOf<Pair<Long, Float>>()
-
-    // Filtered data storage for charts (what's currently displayed)
     private val iaqData = mutableListOf<Pair<Long, Float>>()
     private val pm10Data = mutableListOf<Pair<Long, Float>>()
     private val pm25Data = mutableListOf<Pair<Long, Float>>()
     private val pm1Data = mutableListOf<Pair<Long, Float>>()
     private val temperatureData = mutableListOf<Pair<Long, Float>>()
     private val humidityData = mutableListOf<Pair<Long, Float>>()
-
-    // All measurements for profile chart
     private val allMeasurements = mutableListOf<com.airsens.monitor.database.MeasurementEntity>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         database = AppDatabase.getDatabase(applicationContext)
-
         initializeViews()
         checkPermissions()
         loadHistoricalData()
@@ -101,7 +98,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Reload data when user returns to the app
         loadHistoricalData()
     }
 
@@ -110,8 +106,6 @@ class MainActivity : AppCompatActivity() {
         dataContainer = findViewById(R.id.dataContainer)
         bleConnectionStatus = findViewById(R.id.bleConnectionStatus)
         lastDataReceived = findViewById(R.id.lastDataReceived)
-
-        // Measurement data views
         pm10Text = findViewById(R.id.pm10Text)
         pm25Text = findViewById(R.id.pm25Text)
         pm1Text = findViewById(R.id.pm1Text)
@@ -123,63 +117,59 @@ class MainActivity : AppCompatActivity() {
         timestampText = findViewById(R.id.timestampText)
         obstructedText = findViewById(R.id.obstructedText)
         iaqAccuracyText = findViewById(R.id.iaqAccuracyText)
-
-        // Chart views
         iaqChart = findViewById(R.id.iaqChart)
         gasProfileChart = findViewById(R.id.gasProfileChart)
         particleMatterChart = findViewById(R.id.particleMatterChart)
         tempHumidityChart = findViewById(R.id.tempHumidityChart)
-
-        // Chart control buttons
         lastHourButton = findViewById(R.id.lastHourButton)
         allDataButton = findViewById(R.id.allDataButton)
+        deleteAllDataButton = findViewById(R.id.deleteAllDataButton)
 
-        // Set up button click listeners
-        lastHourButton.setOnClickListener {
-            filterChartsToLastHour()
-        }
+        lastHourButton.setOnClickListener { filterChartsToLastHour() }
+        allDataButton.setOnClickListener { showAllChartData() }
+        deleteAllDataButton.setOnClickListener { showDeleteConfirmationDialog() }
 
-        allDataButton.setOnClickListener {
-            showAllChartData()
-        }
-
-        // Initialize charts
         initializeCharts()
+    }
+    
+    private fun showDeleteConfirmationDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Confirm Deletion")
+            .setMessage("Are you sure you want to delete all historical data? This action cannot be undone.")
+            .setPositiveButton("Delete") { _, _ -> deleteAllData() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun deleteAllData() {
+        lifecycleScope.launch {
+            database.measurementDao().deleteAll()
+            clearChartData()
+            runOnUiThread {
+                Toast.makeText(this@MainActivity, "All data has been deleted.", Toast.LENGTH_SHORT).show()
+                pm10Text.text = "PM10: -- µg/m³"
+                pm25Text.text = "PM2.5: -- µg/m³"
+                pm1Text.text = "PM1.0: -- µg/m³"
+                temperatureText.text = "Temperature: -- °C"
+                humidityText.text = "Humidity: -- %"
+                pressureText.text = "Pressure: -- hPa"
+                iaqText.text = "IAQ: --"
+                gasResistanceText.text = "Gas Resistance: -- Ω"
+            }
+        }
     }
 
     private fun checkPermissions() {
         val permissions = mutableListOf<String>()
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                permissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         } else {
-            // Android 11 and below
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
-
-        // Android 13+ requires POST_NOTIFICATIONS for foreground service notifications
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-
         if (permissions.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, permissions.toTypedArray(), REQUEST_PERMISSIONS)
         }
@@ -189,26 +179,17 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             database.measurementDao().getAllFlow().collect { measurements ->
                 if (measurements.isNotEmpty()) {
-                    // Update debug status
                     runOnUiThread {
                         bleConnectionStatus.text = "BLE: Connected & Receiving Data"
                         bleConnectionStatus.setTextColor(getColor(android.R.color.holo_green_dark))
-
                         val latest = measurements.first()
-                        val now = System.currentTimeMillis()
-                        val dataAge = (now / 1000) - latest.timestamp
-
+                        val dataAge = (System.currentTimeMillis() / 1000) - latest.timestamp
                         lastDataReceived.text = when {
                             dataAge < 5 -> "Last data: Just now"
                             dataAge < 60 -> "Last data: ${dataAge}s ago"
-                            dataAge < 3600 -> "Last data: ${dataAge / 60}m ago"
-                            else -> "Last data: ${dataAge / 3600}h ago"
+                            else -> "Last data: ${dataAge / 60}m ago"
                         }
-
-                        Log.d(TAG, "📊 Data received! PM10=${latest.pm10}, Age=${dataAge}s")
                     }
-
-                    // Update UI with latest data
                     updateUIWithMeasurements(measurements.take(MAX_CHART_ENTRIES))
                 }
             }
@@ -218,551 +199,152 @@ class MainActivity : AppCompatActivity() {
     private fun loadHistoricalData() {
         lifecycleScope.launch {
             try {
-                // Load last 50 measurements from database
                 val measurements = database.measurementDao().getLastN(MAX_CHART_ENTRIES)
-                Log.d(TAG, "🔍 Database check: Found ${measurements.size} measurements")
-
                 if (measurements.isEmpty()) {
-                    Log.w(TAG, "⚠️ No data in database - charts will be empty")
                     runOnUiThread {
                         bleConnectionStatus.text = "BLE: Waiting for data..."
                         bleConnectionStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
                     }
                     return@launch
                 }
-
-                val latest = measurements.first()
-                Log.d(TAG, "📊 Latest data: PM10=${latest.pm10}, PM2.5=${latest.pm25}, " +
-                        "Temp=${latest.temperature}, Humidity=${latest.humidity}, " +
-                        "GasRes=${latest.gasResistance}, Timestamp=${latest.timestamp}")
-
                 updateUIWithMeasurements(measurements)
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading historical data", e)
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "Error loading historical data", Toast.LENGTH_SHORT).show()
-                }
             }
         }
     }
 
     private fun updateUIWithMeasurements(measurements: List<com.airsens.monitor.database.MeasurementEntity>) {
-        // Clear existing data
-        fullPm10Data.clear()
-        fullPm25Data.clear()
-        fullPm1Data.clear()
-        fullTemperatureData.clear()
-        fullHumidityData.clear()
-        fullIaqData.clear()
-        allMeasurements.clear()
-        allMeasurements.addAll(measurements)
+        val distinctMeasurements = measurements.distinctBy { it.timestamp }
 
-        if (measurements.isEmpty()) {
-            return
+        fullIaqData.clear(); fullPm10Data.clear(); fullPm25Data.clear(); fullPm1Data.clear(); fullTemperatureData.clear(); fullHumidityData.clear(); allMeasurements.clear()
+        allMeasurements.addAll(distinctMeasurements)
+        distinctMeasurements.forEach {
+            val ts = it.timestamp
+            fullPm10Data.add(Pair(ts, it.pm10)); fullPm25Data.add(Pair(ts, it.pm25)); fullPm1Data.add(Pair(ts, it.pm1))
+            it.temperature?.let { t -> fullTemperatureData.add(Pair(ts, t)) }
+            it.humidity?.let { h -> fullHumidityData.add(Pair(ts, h)) }
+            it.iaq?.let { i -> fullIaqData.add(Pair(ts, i)) }
         }
-
-        // Store all data in full data lists
-        measurements.forEach { measurement ->
-            val timestamp = measurement.timestamp
-
-            fullPm10Data.add(Pair(timestamp, measurement.pm10))
-            fullPm25Data.add(Pair(timestamp, measurement.pm25))
-            fullPm1Data.add(Pair(timestamp, measurement.pm1))
-
-            measurement.temperature?.let {
-                fullTemperatureData.add(Pair(timestamp, it))
-            }
-
-            measurement.humidity?.let {
-                fullHumidityData.add(Pair(timestamp, it))
-            }
-
-            measurement.iaq?.let {
-                fullIaqData.add(Pair(timestamp, it))
-            }
-        }
-
-        // Log chart data counts
-        Log.d(TAG, "📈 Chart data loaded: IAQ=${fullIaqData.size}, " +
-                "PM10=${fullPm10Data.size}, PM2.5=${fullPm25Data.size}, " +
-                "Temp=${fullTemperatureData.size}, Humidity=${fullHumidityData.size}")
-
-        // By default, show all data (this updates the charts)
         showAllChartData()
-
-        // Update UI text displays on UI thread
         runOnUiThread {
             try {
-                // Display the latest measurement data
-                val latest = measurements.first()
-                val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                val timestamp = Date(latest.timestamp * 1000)
-
+                val latest = distinctMeasurements.first()
+                timestampText.text = "Last Update: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(latest.timestamp * 1000))}"
                 pm10Text.text = "PM10: %.2f µg/m³".format(latest.pm10)
                 pm25Text.text = "PM2.5: %.2f µg/m³".format(latest.pm25)
                 pm1Text.text = "PM1.0: %.2f µg/m³".format(latest.pm1)
-                timestampText.text = "Last Update: ${dateFormat.format(timestamp)}"
-
-                latest.temperature?.let {
-                    temperatureText.text = "Temperature: %.1f°C".format(it)
-                    temperatureText.visibility = View.VISIBLE
-                }
-
-                latest.humidity?.let {
-                    humidityText.text = "Humidity: %.1f%%".format(it)
-                    humidityText.visibility = View.VISIBLE
-                }
-
-                latest.pressure?.let {
-                    pressureText.text = "Pressure: %.1f hPa".format(it)
-                    pressureText.visibility = View.VISIBLE
-                }
-
-                latest.iaq?.let {
-                    iaqText.text = "IAQ: %.1f".format(it)
-                    iaqText.visibility = View.VISIBLE
-                }
-
-                latest.gasResistance?.let {
-                    gasResistanceText.text = "Gas Resistance: %.0f Ω".format(it)
-                    gasResistanceText.visibility = View.VISIBLE
-                }
-
+                latest.temperature?.let { temperatureText.text = "Temperature: %.1f°C".format(it); temperatureText.visibility = View.VISIBLE }
+                latest.humidity?.let { humidityText.text = "Humidity: %.1f%%".format(it); humidityText.visibility = View.VISIBLE }
+                latest.pressure?.let { pressureText.text = "Pressure: %.1f hPa".format(it); pressureText.visibility = View.VISIBLE }
+                latest.iaq?.let { iaqText.text = "IAQ: %.1f".format(it); iaqText.visibility = View.VISIBLE }
+                latest.gasResistance?.let { gasResistanceText.text = "Gas Resistance: %.0f Ω".format(it); gasResistanceText.visibility = View.VISIBLE }
                 obstructedText.text = if (latest.obstructed) "⚠ Sensor Obstructed" else "✓ Sensor Clear"
-                obstructedText.setTextColor(
-                    if (latest.obstructed)
-                        ContextCompat.getColor(this@MainActivity, android.R.color.holo_red_dark)
-                    else
-                        ContextCompat.getColor(this@MainActivity, android.R.color.holo_green_dark)
-                )
-
+                obstructedText.setTextColor(if (latest.obstructed) ContextCompat.getColor(this, android.R.color.holo_red_dark) else ContextCompat.getColor(this, android.R.color.holo_green_dark))
                 iaqAccuracyText.text = "IAQ Accuracy: ${getIAQAccuracyString(latest.iaqAccuracy)}"
-
-                // Show data container if we have data
                 dataContainer.visibility = View.VISIBLE
-                statusText.text = "Loaded ${measurements.size} historical measurements"
-            } catch (e: Exception) {
-                Log.e(TAG, "Error updating UI with measurements", e)
-                Toast.makeText(this@MainActivity, "Error displaying data", Toast.LENGTH_SHORT).show()
-            }
+            } catch (e: Exception) { Log.e(TAG, "Error updating UI text", e) }
         }
     }
 
     private fun initializeCharts() {
-        // Configure IAQ Chart (Line Chart)
         configureIaqChart()
-
-        // Configure Particle Matter Chart (Line Chart with 3 series)
         configureParticleMatterChart()
-
-        // Configure Temperature/Humidity Chart (Line Chart with 2 series)
         configureTempHumidityChart()
-
-        // Set initial empty data
-        updateIaqChart()
-        updateGasProfileChart()
-        updateParticleMatterChart()
-        updateTempHumidityChart()
-    }
-
-    private fun configureBarChart(chart: BarChart, description: String) {
-        chart.description.text = description
-        chart.description.textSize = 12f
-        chart.setTouchEnabled(true)
-        chart.setDrawGridBackground(false)
-        chart.setPinchZoom(true)
-        chart.setScaleEnabled(true)
-
-        // Enable scrolling/dragging
-        chart.isDragEnabled = true
-        chart.setScaleXEnabled(true)   // Enable X-axis scaling (time)
-        chart.setScaleYEnabled(false)  // Disable Y-axis scaling (auto-scale instead)
-
-        // Auto-scale Y-axis to fit visible data
-        chart.isAutoScaleMinMaxEnabled = true
-
-        // Set visible range (show ~50 data points initially, can scroll to see more)
-        chart.setVisibleXRangeMaximum(50f * 30f)  // ~25 minutes visible (50 points * 30 seconds)
-        chart.setVisibleXRangeMinimum(10f * 30f)  // Min zoom shows 10 points
-
-        // X-axis configuration
-        val xAxis = chart.xAxis
-        xAxis.position = XAxis.XAxisPosition.BOTTOM
-        xAxis.setDrawGridLines(true)
-        xAxis.granularity = 1f
-        xAxis.valueFormatter = object : ValueFormatter() {
-            override fun getFormattedValue(value: Float): String {
-                val date = Date(value.toLong() * 1000)
-                return SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
-            }
-        }
-
-        // Y-axis configuration
-        chart.axisLeft.setDrawGridLines(true)
-        chart.axisLeft.granularity = 1f
-        chart.axisRight.isEnabled = false
-
-        // Legend
-        chart.legend.isEnabled = false
-
-        // Interactive marker
-        chart.setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
-            override fun onValueSelected(e: Entry?, h: Highlight?) {
-                if (e != null) {
-                    val timestamp = e.x.toLong()
-                    val date = Date(timestamp * 1000)
-                    val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(date)
-                    Toast.makeText(
-                        this@MainActivity,
-                        "$time\n${String.format("%.0f Ω", e.y)}",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            }
-            override fun onNothingSelected() {}
-        })
+        updateIaqChart(true); updateGasProfileChart(); updateParticleMatterChart(true); updateTempHumidityChart(true)
+        iaqChart.onChartGestureListener = createGestureListener(iaqChart)
+        particleMatterChart.onChartGestureListener = createGestureListener(particleMatterChart)
+        tempHumidityChart.onChartGestureListener = createGestureListener(tempHumidityChart)
     }
 
     private fun configureLineChart(chart: LineChart, description: String) {
-        chart.description.text = description
-        chart.description.textSize = 12f
-        chart.setTouchEnabled(true)
-        chart.setDrawGridBackground(false)
-        chart.setPinchZoom(true)
-        chart.setScaleEnabled(true)
-
-        // Enable scrolling/dragging
-        chart.isDragEnabled = true
-        chart.setScaleXEnabled(true)   // Enable X-axis scaling (time)
-        chart.setScaleYEnabled(false)  // Disable Y-axis scaling (auto-scale instead)
-
-        // Auto-scale Y-axis to fit visible data
-        chart.isAutoScaleMinMaxEnabled = true
-
-        // Set visible range (show ~50 data points initially, can scroll to see more)
-        chart.setVisibleXRangeMaximum(50f * 30f)  // ~25 minutes visible (50 points * 30 seconds)
-        chart.setVisibleXRangeMinimum(10f * 30f)  // Min zoom shows 10 points
-
-        // X-axis configuration
-        val xAxis = chart.xAxis
-        xAxis.position = XAxis.XAxisPosition.BOTTOM
-        xAxis.setDrawGridLines(true)
-        xAxis.granularity = 1f
-        xAxis.valueFormatter = object : ValueFormatter() {
-            override fun getFormattedValue(value: Float): String {
-                val date = Date(value.toLong() * 1000)
-                return SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
-            }
-        }
-
-        // Y-axis configuration
-        chart.axisLeft.setDrawGridLines(true)
-        chart.axisLeft.granularity = 1f
-        chart.axisRight.isEnabled = false
-
-        // Legend
-        chart.legend.verticalAlignment = Legend.LegendVerticalAlignment.TOP
-        chart.legend.horizontalAlignment = Legend.LegendHorizontalAlignment.RIGHT
-        chart.legend.orientation = Legend.LegendOrientation.VERTICAL
-        chart.legend.setDrawInside(true)
+        chart.description.text = description; chart.description.textSize = 12f; chart.setTouchEnabled(true); chart.setDrawGridBackground(false); chart.setPinchZoom(true); chart.setScaleEnabled(true); chart.isDragEnabled = true; chart.setScaleXEnabled(true); chart.setScaleYEnabled(false); chart.isAutoScaleMinMaxEnabled = true;         chart.setVisibleXRangeMaximum(120f)
+        chart.setVisibleXRangeMinimum(60f)
+        val xAxis = chart.xAxis; xAxis.position = XAxis.XAxisPosition.BOTTOM; xAxis.setDrawGridLines(true); xAxis.granularity = 1f
+        xAxis.valueFormatter = object : ValueFormatter() { private val tf = SimpleDateFormat("HH:mm", Locale.getDefault()); override fun getFormattedValue(value: Float) = tf.format(Date(value.toLong() * 1000)) }
+        chart.axisLeft.setDrawGridLines(true); chart.axisRight.isEnabled = false
+        chart.legend.verticalAlignment = Legend.LegendVerticalAlignment.TOP; chart.legend.horizontalAlignment = Legend.LegendHorizontalAlignment.RIGHT; chart.legend.orientation = Legend.LegendOrientation.VERTICAL; chart.legend.setDrawInside(true)
     }
 
-    private fun configureIaqChart() {
-        configureLineChart(iaqChart, "IAQ (Indoor Air Quality Index)")
+    private fun configureIaqChart() { configureLineChart(iaqChart, "IAQ (Indoor Air Quality Index)"); val m = TimeBasedMarkerView(this, R.layout.chart_marker_view); m.chartView = iaqChart; iaqChart.marker = m; iaqChart.invalidate() }
+    private fun configureParticleMatterChart() { configureLineChart(particleMatterChart, "Particle Matter (µg/m³)"); val m = TimeBasedMarkerView(this, R.layout.chart_marker_view); m.chartView = particleMatterChart; particleMatterChart.marker = m; particleMatterChart.invalidate() }
+    private fun configureTempHumidityChart() { configureLineChart(tempHumidityChart, "Temperature (°C) & Humidity (%)"); val m = TimeBasedMarkerView(this, R.layout.chart_marker_view); m.chartView = tempHumidityChart; tempHumidityChart.marker = m; tempHumidityChart.invalidate() }
 
-        // Set custom marker view
-        val marker = TimeBasedMarkerView(this, R.layout.chart_marker_view)
-        marker.chartView = iaqChart
-        iaqChart.marker = marker
-
-        iaqChart.invalidate()
+    private fun updateIaqChart(forceResetView: Boolean = false) {
+        val entries = iaqData.sortedBy { it.first }.map { (ts, v) -> Entry(ts.toFloat(), v) }
+        if (iaqChart.data == null) { iaqChart.data = LineData(LineDataSet(entries, "IAQ").apply { color = Color.rgb(255, 152, 0); setCircleColor(color); lineWidth = 2f; circleRadius = 1.5f; setDrawValues(false); mode = LineDataSet.Mode.LINEAR }) }
+        else { (iaqChart.data.getDataSetByLabel("IAQ", true) as LineDataSet).apply { clear(); entries.forEach { addEntryOrdered(it) } }; iaqChart.data.notifyDataChanged(); iaqChart.notifyDataSetChanged() }
+        if (forceResetView || iaqChart.viewPortHandler.scaleX <= 1f) { entries.lastOrNull()?.let { iaqChart.moveViewToX(it.x) } }; iaqChart.invalidate()
     }
 
-    private fun configureParticleMatterChart() {
-        configureLineChart(particleMatterChart, "Particle Matter (µg/m³)")
+    private fun updateGasProfileChart() { gasProfileChart.updateData(allMeasurements) }
 
-        // Set custom marker view
-        val marker = TimeBasedMarkerView(this, R.layout.chart_marker_view)
-        marker.chartView = particleMatterChart
-        particleMatterChart.marker = marker
-
-        particleMatterChart.invalidate()
-    }
-
-    private fun configureTempHumidityChart() {
-        tempHumidityChart.description.text = "Temperature (°C) & Humidity (%)"
-        tempHumidityChart.description.textSize = 12f
-        tempHumidityChart.setTouchEnabled(true)
-        tempHumidityChart.setDrawGridBackground(false)
-        tempHumidityChart.setPinchZoom(true)
-        tempHumidityChart.isDragEnabled = true
-        tempHumidityChart.setScaleEnabled(true)
-        tempHumidityChart.setScaleXEnabled(true)
-        tempHumidityChart.setScaleYEnabled(false)
-        tempHumidityChart.isAutoScaleMinMaxEnabled = true
-
-        // Set an initial visible range
-        tempHumidityChart.setVisibleXRangeMaximum(120f) // Show a limited range of data points initially
-
-        // X-axis configuration
-        val xAxis = tempHumidityChart.xAxis
-        xAxis.position = XAxis.XAxisPosition.BOTTOM
-        xAxis.setDrawGridLines(true)
-        xAxis.granularity = 1f
-        xAxis.textColor = Color.DKGRAY
-        xAxis.axisLineColor = Color.DKGRAY
-        xAxis.valueFormatter = object : ValueFormatter() {
-            private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            override fun getFormattedValue(value: Float): String {
-                return timeFormat.format(Date(value.toLong() * 1000))
-            }
-        }
-
-        // Y-axis configuration
-        val leftAxis = tempHumidityChart.axisLeft
-        leftAxis.setDrawGridLines(true)
-        leftAxis.granularity = 5f
-        leftAxis.textColor = Color.DKGRAY
-
-        tempHumidityChart.axisRight.isEnabled = false
-
-        // Legend configuration
-        val legend = tempHumidityChart.legend
-        legend.verticalAlignment = Legend.LegendVerticalAlignment.TOP
-        legend.horizontalAlignment = Legend.LegendHorizontalAlignment.RIGHT
-        legend.orientation = Legend.LegendOrientation.HORIZONTAL
-        legend.setDrawInside(false)
-        legend.textColor = Color.DKGRAY
-
-        // Set custom marker view
-        val marker = TimeBasedMarkerView(this, R.layout.chart_marker_view)
-        marker.chartView = tempHumidityChart
-        tempHumidityChart.marker = marker
-
-        tempHumidityChart.invalidate()
-    }
-
-    private fun updateIaqChart() {
-        while (iaqData.size > MAX_CHART_ENTRIES) iaqData.removeAt(0)
-
-        val entries = iaqData.sortedBy { it.first }.map { (timestamp, value) ->
-            Entry(timestamp.toFloat(), value)
-        }
-
-        if (iaqChart.data == null) {
-            val dataSet = LineDataSet(entries, "IAQ").apply {
-                color = Color.rgb(255, 152, 0)  // Orange
-                setCircleColor(color)
-                lineWidth = 2f
-                circleRadius = 1.5f
-                setDrawValues(false)
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-            }
-            iaqChart.data = LineData(dataSet)
-        } else {
-            val dataSet = iaqChart.data.getDataSetByLabel("IAQ", true) as LineDataSet
-            dataSet.clear()
-            entries.forEach { dataSet.addEntryOrdered(it) }
-            iaqChart.data.notifyDataChanged()
-            iaqChart.notifyDataSetChanged()
-        }
-
-        if (iaqChart.viewPortHandler.scaleX <= 1f) {
-            entries.lastOrNull()?.let { iaqChart.moveViewToX(it.x) }
-        }
-
-        iaqChart.invalidate()
-    }
-
-    private fun updateGasProfileChart() {
-        Log.d(TAG, "📊 Updating gas profile chart with ${allMeasurements.size} measurements")
-        gasProfileChart.updateData(allMeasurements)
-    }
-
-    private fun updateParticleMatterChart() {
-        while (pm10Data.size > MAX_CHART_ENTRIES) pm10Data.removeAt(0)
-        while (pm25Data.size > MAX_CHART_ENTRIES) pm25Data.removeAt(0)
-        while (pm1Data.size > MAX_CHART_ENTRIES) pm1Data.removeAt(0)
-
-        val pm10Entries = pm10Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-        val pm25Entries = pm25Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-        val pm1Entries = pm1Data.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-
+    private fun updateParticleMatterChart(forceResetView: Boolean = false) {
+        val pm10e = pm10Data.sortedBy { it.first }.map { (ts, v) -> Entry(ts.toFloat(), v) }; val pm25e = pm25Data.sortedBy { it.first }.map { (ts, v) -> Entry(ts.toFloat(), v) }; val pm1e = pm1Data.sortedBy { it.first }.map { (ts, v) -> Entry(ts.toFloat(), v) }
         if (particleMatterChart.data == null) {
-            val dataSets = mutableListOf<ILineDataSet>()
-            dataSets.add(LineDataSet(pm10Entries, "PM10 (µg/m³)") .apply {
-                color = Color.rgb(255, 99, 71) // Tomato
-                setCircleColor(color)
-                lineWidth = 2f
-                circleRadius = 1.5f
-                setDrawValues(false)
-            })
-            dataSets.add(LineDataSet(pm25Entries, "PM2.5 (µg/m³)") .apply {
-                color = Color.rgb(255, 165, 0) // Orange
-                setCircleColor(color)
-                lineWidth = 2f
-                circleRadius = 1.5f
-                setDrawValues(false)
-            })
-            dataSets.add(LineDataSet(pm1Entries, "PM1.0 (µg/m³)") .apply {
-                color = Color.rgb(135, 206, 250) // Light Sky Blue
-                setCircleColor(color)
-                lineWidth = 2f
-                circleRadius = 1.5f
-                setDrawValues(false)
-            })
-            particleMatterChart.data = LineData(dataSets)
+            val sets = mutableListOf<ILineDataSet>(); sets.add(LineDataSet(pm10e, "PM10 (µg/m³)") .apply { color = Color.rgb(255, 99, 71); setCircleColor(color); lineWidth = 2f; circleRadius = 1.5f; setDrawValues(false) }); sets.add(LineDataSet(pm25e, "PM2.5 (µg/m³)") .apply { color = Color.rgb(255, 165, 0); setCircleColor(color); lineWidth = 2f; circleRadius = 1.5f; setDrawValues(false) }); sets.add(LineDataSet(pm1e, "PM1.0 (µg/m³)") .apply { color = Color.rgb(135, 206, 250); setCircleColor(color); lineWidth = 2f; circleRadius = 1.5f; setDrawValues(false) }); particleMatterChart.data = LineData(sets)
         } else {
-            val pm10DataSet = particleMatterChart.data.getDataSetByLabel("PM10 (µg/m³)", true) as LineDataSet
-            val pm25DataSet = particleMatterChart.data.getDataSetByLabel("PM2.5 (µg/m³)", true) as LineDataSet
-            val pm1DataSet = particleMatterChart.data.getDataSetByLabel("PM1.0 (µg/m³)", true) as LineDataSet
-
-            pm10DataSet.clear()
-            pm25DataSet.clear()
-            pm1DataSet.clear()
-
-            pm10Entries.forEach { pm10DataSet.addEntryOrdered(it) }
-            pm25Entries.forEach { pm25DataSet.addEntryOrdered(it) }
-            pm1Entries.forEach { pm1DataSet.addEntryOrdered(it) }
-
-            particleMatterChart.data.notifyDataChanged()
-            particleMatterChart.notifyDataSetChanged()
+            (particleMatterChart.data.getDataSetByLabel("PM10 (µg/m³)", true) as LineDataSet).apply { clear(); pm10e.forEach { addEntryOrdered(it) } }; (particleMatterChart.data.getDataSetByLabel("PM2.5 (µg/m³)", true) as LineDataSet).apply { clear(); pm25e.forEach { addEntryOrdered(it) } }; (particleMatterChart.data.getDataSetByLabel("PM1.0 (µg/m³)", true) as LineDataSet).apply { clear(); pm1e.forEach { addEntryOrdered(it) } }
+            particleMatterChart.data.notifyDataChanged(); particleMatterChart.notifyDataSetChanged()
         }
-
-        if (particleMatterChart.viewPortHandler.scaleX <= 1f) {
-            val lastX = pm10Entries.lastOrNull()?.x ?: pm25Entries.lastOrNull()?.x ?: pm1Entries.lastOrNull()?.x ?: 0f
-            if (lastX > 0f) {
-                particleMatterChart.moveViewToX(lastX)
-            }
-        }
-
+        if (forceResetView || particleMatterChart.viewPortHandler.scaleX <= 1f) { val lastX = pm10e.lastOrNull()?.x ?: pm25e.lastOrNull()?.x ?: pm1e.lastOrNull()?.x ?: 0f; if (lastX > 0f) particleMatterChart.moveViewToX(lastX) }
         particleMatterChart.invalidate()
     }
 
-    private fun updateTempHumidityChart() {
-        while (temperatureData.size > MAX_CHART_ENTRIES) temperatureData.removeAt(0)
-        while (humidityData.size > MAX_CHART_ENTRIES) humidityData.removeAt(0)
-
-        val tempEntries = temperatureData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-        val humEntries = humidityData.sortedBy { it.first }.map { (timestamp, value) -> Entry(timestamp.toFloat(), value) }
-
+    private fun updateTempHumidityChart(forceResetView: Boolean = false) {
+        val tempE = temperatureData.sortedBy { it.first }.map { (ts, v) -> Entry(ts.toFloat(), v) }; val humE = humidityData.sortedBy { it.first }.map { (ts, v) -> Entry(ts.toFloat(), v) }
         if (tempHumidityChart.data == null) {
-            val dataSets = mutableListOf<ILineDataSet>()
-            dataSets.add(LineDataSet(tempEntries, "Temperature (°C)").apply {
-                color = Color.parseColor("#FF5722") // Deep Orange
-                setCircleColor(color)
-                lineWidth = 2.5f
-                circleRadius = 1.5f
-                setDrawValues(false)
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-            })
-            dataSets.add(LineDataSet(humEntries, "Humidity (%)").apply {
-                color = Color.parseColor("#2196F3") // Blue
-                setCircleColor(color)
-                lineWidth = 2.5f
-                circleRadius = 1.5f
-                setDrawValues(false)
-                mode = LineDataSet.Mode.CUBIC_BEZIER
-            })
-            tempHumidityChart.data = LineData(dataSets)
+            val sets = mutableListOf<ILineDataSet>(); sets.add(LineDataSet(tempE, "Temperature (°C)").apply { color = Color.parseColor("#FF5722"); setCircleColor(color); lineWidth = 2.5f; circleRadius = 1.5f; setDrawValues(false); mode = LineDataSet.Mode.LINEAR }); sets.add(LineDataSet(humE, "Humidity (%)").apply { color = Color.parseColor("#2196F3"); setCircleColor(color); lineWidth = 2.5f; circleRadius = 1.5f; setDrawValues(false); mode = LineDataSet.Mode.LINEAR }); tempHumidityChart.data = LineData(sets)
         } else {
-            val tempDataSet = tempHumidityChart.data.getDataSetByLabel("Temperature (°C)", true) as LineDataSet
-            val humDataSet = tempHumidityChart.data.getDataSetByLabel("Humidity (%)", true) as LineDataSet
-
-            tempDataSet.clear()
-            humDataSet.clear()
-
-            tempEntries.forEach { tempDataSet.addEntryOrdered(it) }
-            humEntries.forEach { humDataSet.addEntryOrdered(it) }
-
-            tempHumidityChart.data.notifyDataChanged()
-            tempHumidityChart.notifyDataSetChanged()
+            (tempHumidityChart.data.getDataSetByLabel("Temperature (°C)", true) as LineDataSet).apply { clear(); tempE.forEach { addEntryOrdered(it) } }; (tempHumidityChart.data.getDataSetByLabel("Humidity (%)", true) as LineDataSet).apply { clear(); humE.forEach { addEntryOrdered(it) } }
+            tempHumidityChart.data.notifyDataChanged(); tempHumidityChart.notifyDataSetChanged()
         }
-
-        if (tempHumidityChart.viewPortHandler.scaleX <= 1f) {
-            val lastX = tempEntries.lastOrNull()?.x ?: humEntries.lastOrNull()?.x ?: 0f
-            if (lastX > 0f) {
-                tempHumidityChart.moveViewToX(lastX)
-            }
-        }
-
+        if (forceResetView || tempHumidityChart.viewPortHandler.scaleX <= 1f) { val lastX = tempE.lastOrNull()?.x ?: humE.lastOrNull()?.x ?: 0f; if (lastX > 0f) tempHumidityChart.moveViewToX(lastX) }
         tempHumidityChart.invalidate()
     }
 
     private fun clearChartData() {
-        iaqData.clear()
-        pm10Data.clear()
-        pm25Data.clear()
-        pm1Data.clear()
-        temperatureData.clear()
-        humidityData.clear()
-
-        updateIaqChart()
-        updateParticleMatterChart()
-        updateTempHumidityChart()
+        iaqData.clear(); pm10Data.clear(); pm25Data.clear(); pm1Data.clear(); temperatureData.clear(); humidityData.clear()
+        updateIaqChart(true); updateParticleMatterChart(true); updateTempHumidityChart(true)
     }
 
     private fun filterChartsToLastHour() {
-        val now = System.currentTimeMillis() / 1000 // Current time in seconds
-        val oneHourAgo = now - 3600 // 1 hour = 3600 seconds
-
-        // Filter all data to last hour
-        iaqData.clear()
-        iaqData.addAll(fullIaqData.filter { it.first >= oneHourAgo })
-
-        pm10Data.clear()
-        pm10Data.addAll(fullPm10Data.filter { it.first >= oneHourAgo })
-
-        pm25Data.clear()
-        pm25Data.addAll(fullPm25Data.filter { it.first >= oneHourAgo })
-
-        pm1Data.clear()
-        pm1Data.addAll(fullPm1Data.filter { it.first >= oneHourAgo })
-
-        temperatureData.clear()
-        temperatureData.addAll(fullTemperatureData.filter { it.first >= oneHourAgo })
-
-        humidityData.clear()
-        humidityData.addAll(fullHumidityData.filter { it.first >= oneHourAgo })
-
-        // Update all charts with filtered data
-        updateIaqChart()
-        updateGasProfileChart()
-        updateParticleMatterChart()
-        updateTempHumidityChart()
-
+        val oneHourAgo = (System.currentTimeMillis() / 1000) - 3600
+        iaqData.clear(); iaqData.addAll(fullIaqData.filter { it.first >= oneHourAgo }); pm10Data.clear(); pm10Data.addAll(fullPm10Data.filter { it.first >= oneHourAgo }); pm25Data.clear(); pm25Data.addAll(fullPm25Data.filter { it.first >= oneHourAgo }); pm1Data.clear(); pm1Data.addAll(fullPm1Data.filter { it.first >= oneHourAgo }); temperatureData.clear(); temperatureData.addAll(fullTemperatureData.filter { it.first >= oneHourAgo }); humidityData.clear(); humidityData.addAll(fullHumidityData.filter { it.first >= oneHourAgo })
+        updateIaqChart(true); updateGasProfileChart(); updateParticleMatterChart(true); updateTempHumidityChart(true)
         Toast.makeText(this, "Showing data from last hour", Toast.LENGTH_SHORT).show()
     }
 
     private fun showAllChartData() {
-        // Copy all full data to filtered data
-        iaqData.clear()
-        iaqData.addAll(fullIaqData)
+        iaqData.clear(); iaqData.addAll(fullIaqData); pm10Data.clear(); pm10Data.addAll(fullPm10Data); pm25Data.clear(); pm25Data.addAll(fullPm25Data); pm1Data.clear(); pm1Data.addAll(fullPm1Data); temperatureData.clear(); temperatureData.addAll(fullTemperatureData); humidityData.clear(); humidityData.addAll(fullHumidityData)
+        updateIaqChart(true); updateGasProfileChart(); updateParticleMatterChart(true); updateTempHumidityChart(true)
+    }
 
-        pm10Data.clear()
-        pm10Data.addAll(fullPm10Data)
-
-        pm25Data.clear()
-        pm25Data.addAll(fullPm25Data)
-
-        pm1Data.clear()
-        pm1Data.addAll(fullPm1Data)
-
-        temperatureData.clear()
-        temperatureData.addAll(fullTemperatureData)
-
-        humidityData.clear()
-        humidityData.addAll(fullHumidityData)
-
-        // Update all charts with full data
-        updateIaqChart()
-        updateGasProfileChart()
-        updateParticleMatterChart()
-        updateTempHumidityChart()
-
-        if (fullPm10Data.isNotEmpty()) {
-            Toast.makeText(this, "Showing all data (${fullPm10Data.size} points)", Toast.LENGTH_SHORT).show()
+    private fun createGestureListener(sourceChart: LineChart): OnChartGestureListener {
+        return object : OnChartGestureListener {
+            override fun onChartGestureStart(me: MotionEvent?, lastPerformedGesture: ChartTouchListener.ChartGesture?) {}
+            override fun onChartGestureEnd(me: MotionEvent?, lastPerformedGesture: ChartTouchListener.ChartGesture?) { syncCharts(sourceChart) }
+            override fun onChartSingleTapped(me: MotionEvent?) {}
+            override fun onChartDoubleTapped(me: MotionEvent?) {}
+            override fun onChartLongPressed(me: MotionEvent?) {}
+            override fun onChartFling(me1: MotionEvent?, me2: MotionEvent?, velocityX: Float, velocityY: Float) {}
+            override fun onChartScale(me: MotionEvent?, scaleX: Float, scaleY: Float) { syncCharts(sourceChart) }
+            override fun onChartTranslate(me: MotionEvent?, dX: Float, dY: Float) { syncCharts(sourceChart) }
         }
+    }
+
+    private fun syncCharts(sourceChart: LineChart) {
+        if (isSyncing) return
+        isSyncing = true
+        val sourceMatrix = sourceChart.viewPortHandler.matrixTouch
+        val charts = listOf(iaqChart, particleMatterChart, tempHumidityChart)
+        for (targetChart in charts) {
+            if (targetChart != sourceChart) {
+                targetChart.viewPortHandler.matrixTouch.set(sourceMatrix)
+                targetChart.invalidate()
+            }
+        }
+        isSyncing = false
     }
 
     private fun getIAQAccuracyString(accuracy: Int): String {
@@ -777,25 +359,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Lifecycle observer handles service lifecycle automatically
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-
         if (requestCode == REQUEST_PERMISSIONS) {
-            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                Toast.makeText(this, "Permissions granted", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(
-                    this,
-                    "Permissions required for BLE scanning",
-                    Toast.LENGTH_LONG
-                ).show()
+            if (!grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                Toast.makeText(this, "Permissions required for BLE scanning", Toast.LENGTH_LONG).show()
             }
         }
     }

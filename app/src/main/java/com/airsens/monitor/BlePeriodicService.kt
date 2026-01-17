@@ -389,7 +389,14 @@ class BlePeriodicService : Service() {
                     Log.d(TAG, "Received ${measurements.size} measurements from bulk sync")
 
                     // 5. Store all measurements in database
-                    val entities = measurements.map { measurement ->
+                    val now = System.currentTimeMillis() / 1000
+                    val validMeasurements = measurements.filter { it.timestamp <= now }
+                    val futureMeasurements = measurements.size - validMeasurements.size
+                    if (futureMeasurements > 0) {
+                        Log.w(TAG, "$futureMeasurements measurements from the future, ignoring")
+                    }
+
+                    val entities = validMeasurements.map { measurement ->
                         val gasResistanceArrayJson = if (measurement.gasResistanceArray != null) {
                             JSONArray(measurement.gasResistanceArray.toList()).toString()
                         } else {
@@ -415,23 +422,37 @@ class BlePeriodicService : Service() {
                         )
                     }
 
-                    database.measurementDao().insertAll(entities)
-                    database.measurementDao().keepOnlyLast(500) // Keep last 500 measurements
-
-                    // 6. Acknowledge data to ESP32 (tells it to delete synced data from flash)
-                    val maxTimestamp = measurements.maxOf { it.timestamp }
-                    val ackSuccess = acknowledgeBulkData(gatt, maxTimestamp)
-
-                    if (ackSuccess) {
-                        Log.d(TAG, "Successfully acknowledged ${measurements.size} measurements (up to timestamp $maxTimestamp)")
-                        updateNotification("Synced ${measurements.size} measurements")
-                    } else {
-                        Log.w(TAG, "Failed to acknowledge bulk data")
-                        updateNotification("Sync incomplete")
+                    val results = database.measurementDao().insertAll(entities)
+                    val insertedCount = results.count { it != -1L }
+                    val duplicateCount = entities.size - insertedCount
+                    if (duplicateCount > 0) {
+                        Log.w(TAG, "$duplicateCount measurements with existing timestamps, ignoring.")
                     }
 
-                    val latest = measurements.last()
-                    Log.d(TAG, "Latest measurement: PM2.5=${latest.pm25}, Temp=${latest.temperature}")
+                    database.measurementDao().keepOnlyLast(500) // Keep last 500 measurements
+
+                    if (insertedCount > 0) {
+                        // 6. Acknowledge data to ESP32 (tells it to delete synced data from flash)
+                        val maxTimestamp = validMeasurements.maxOf { it.timestamp }
+                        val ackSuccess = acknowledgeBulkData(gatt, maxTimestamp)
+
+                        if (ackSuccess) {
+                            Log.d(
+                                TAG,
+                                "Successfully acknowledged $insertedCount measurements (up to timestamp $maxTimestamp)"
+                            )
+                            updateNotification("Synced $insertedCount measurements")
+                        } else {
+                            Log.w(TAG, "Failed to acknowledge bulk data")
+                            updateNotification("Sync incomplete")
+                        }
+
+                        val latest = validMeasurements.last()
+                        Log.d(
+                            TAG,
+                            "Latest measurement: PM2.5=${latest.pm25}, Temp=${latest.temperature}"
+                        )
+                    }
                 } else {
                     Log.d(TAG, "No new measurements to sync (ESP32 buffer empty or no data in range)")
                     updateNotification("No new data")

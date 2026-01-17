@@ -281,6 +281,25 @@
 
             </LinearLayout>
 
+            <!-- Data Management Section -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="end"
+                android:paddingEnd="8dp"
+                android:paddingStart="8dp"
+                android:paddingBottom="16dp">
+
+                <Button
+                    android:id="@+id/deleteAllDataButton"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Delete All Data"
+                    android:textColor="@android:color/holo_red_dark" />
+            </LinearLayout>
+
             <!-- IAQ History Chart -->
             <TextView
                 android:layout_width="match_parent"

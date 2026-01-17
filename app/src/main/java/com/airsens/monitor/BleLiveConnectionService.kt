@@ -986,7 +986,16 @@ class BleLiveConnectionService : Service() {
                     gasResistanceArray = gasResistanceArrayJson
                 )
 
-                database.measurementDao().insert(entity)
+                val now = System.currentTimeMillis() / 1000
+                if (entity.timestamp > now) {
+                    Log.w(TAG, "Measurement from the future, ignoring: ${entity.timestamp} > $now")
+                    return@launch
+                }
+
+                val result = database.measurementDao().insert(entity)
+                if (result == -1L) {
+                    Log.w(TAG, "Measurement with timestamp ${entity.timestamp} already exists, ignoring.")
+                }
                 database.measurementDao().keepOnlyLast(500)
 
                 updateNotification("Connected - Last PM2.5: ${String.format("%.1f", measurement.pm25)} µg/m³")
@@ -1048,18 +1057,32 @@ class BleLiveConnectionService : Service() {
             // Parse gas resistance array (10 int32_t values)
             val gasResistanceArray = IntArray(10) { buffer.int }
 
-            Log.d(TAG, "🌡️ Parsed: PM10=$pm10, PM2.5=$pm25, PM1=$pm1")
-            Log.d(TAG, "🌡️ Temp=${temperature}°C, Humidity=$humidity%, Pressure=$pressure Pa")
-            Log.d(TAG, "🌡️ IAQ=$iaq, Gas=$gasResistance Ω")
-
-            if (gasResistanceProfile > 0) {
-                Log.i(TAG, "✓ GAS RESISTANCE ARRAY RECEIVED (profile=$gasResistanceProfile):")
-                val arrayStr = gasResistanceArray.joinToString(", ", "[", "]")
-                Log.i(TAG, "  Values: $arrayStr")
-                Log.d(TAG, "  T0=${gasResistanceArray[0]}, T1=${gasResistanceArray[1]}, T2=${gasResistanceArray[2]}, T3=${gasResistanceArray[3]}, T4=${gasResistanceArray[4]}")
-                Log.d(TAG, "  T5=${gasResistanceArray[5]}, T6=${gasResistanceArray[6]}, T7=${gasResistanceArray[7]}, T8=${gasResistanceArray[8]}, T9=${gasResistanceArray[9]}")
+            val gasArrayString = if (gasResistanceProfile > 0) {
+                gasResistanceArray.joinToString(", ", "[", "]")
             } else {
-                Log.d(TAG, "⚠️ No gas profile data (profile=0)")
+                "N/A"
+            }
+
+            val logMessage = """
+--- Parsed Measurement Data ---
+Timestamp: $timestamp
+PM1: $pm1 µg/m³
+PM2.5: $pm25 µg/m³
+PM10: $pm10 µg/m³
+Temperature: $temperature °C
+Humidity: $humidity %
+Pressure: $pressure Pa
+IAQ: $iaq
+IAQ Accuracy: $iaqAccuracy
+Gas Resistance: $gasResistance Ω
+Gas Profile: $gasResistanceProfile
+Gas Array: $gasArrayString
+Flag - Obstructed: $obstructed
+Flag - Time Valid: $timeValid
+---------------------------------
+            """.trimIndent()
+            logMessage.lines().forEach { line ->
+                Log.d(TAG, line)
             }
 
             return AirQualitySensorClient.MeasurementData(
@@ -1271,7 +1294,19 @@ class BleLiveConnectionService : Service() {
         try {
             Log.i(TAG, "💾 Saving ${measurements.size} measurements to database")
 
-            val entities = measurements.map { m ->
+            val now = System.currentTimeMillis() / 1000
+            val validMeasurements = measurements.filter { it.timestamp <= now }
+            val futureMeasurements = measurements.size - validMeasurements.size
+            if (futureMeasurements > 0) {
+                Log.w(TAG, "$futureMeasurements measurements from the future, ignoring")
+            }
+
+            val entities = validMeasurements.map { m ->
+                val gasResistanceArrayJson = if (m.gasResistanceArray != null) {
+                    JSONArray(m.gasResistanceArray.toList()).toString()
+                } else {
+                    null
+                }
                 MeasurementEntity(
                     timestamp = m.timestamp,
                     receivedAt = System.currentTimeMillis(),
@@ -1285,22 +1320,32 @@ class BleLiveConnectionService : Service() {
                     pressure = m.pressure,
                     iaq = m.iaq,
                     gasResistance = m.gasResistance,
-                    iaqAccuracy = m.iaqAccuracy
+                    iaqAccuracy = m.iaqAccuracy,
+                    gasResistanceProfile = m.gasResistanceProfile,
+                    gasResistanceArray = gasResistanceArrayJson
                 )
             }
 
-            database.measurementDao().insertAll(entities)
+            val results = database.measurementDao().insertAll(entities)
+            val insertedCount = results.count { it != -1L }
+            val duplicateCount = entities.size - insertedCount
+            if (duplicateCount > 0) {
+                Log.w(TAG, "$duplicateCount measurements with existing timestamps, ignoring.")
+            }
             database.measurementDao().keepOnlyLast(500)
 
-            val latest = measurements.last()
-            Log.i(TAG, "✓ Saved ${measurements.size} measurements")
-            Log.i(TAG, "   Latest: PM2.5=${String.format("%.1f", latest.pm25)} µg/m³, Temp=${latest.temperature}°C")
+            if (validMeasurements.isNotEmpty()) {
+                val latest = validMeasurements.last()
+                Log.i(TAG, "✓ Saved $insertedCount measurements")
+                Log.i(TAG, "   Latest: PM2.5=${String.format("%.1f", latest.pm25)} µg/m³, Temp=${latest.temperature}°C")
 
-            // Acknowledge to ESP32
-            val maxTimestamp = measurements.maxOf { it.timestamp }
-            acknowledgeBulkData(gatt, maxTimestamp)
+                // Acknowledge to ESP32
+                val maxTimestamp = validMeasurements.maxOf { it.timestamp }
+                acknowledgeBulkData(gatt, maxTimestamp)
 
-            updateNotification("Connected - ${measurements.size} measurements synced")
+                updateNotification("Connected - $insertedCount measurements synced")
+            }
+
         } catch (e: Exception) {
             Log.e(TAG, "Error saving bulk measurements", e)
         }

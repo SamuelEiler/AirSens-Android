@@ -279,7 +279,15 @@ class SensorSyncWorker(
         // 5. Save measurements
         if (accumulatedMeasurements.isNotEmpty()) {
             Log.i(TAG, "Saving ${accumulatedMeasurements.size} measurements")
-            val entities = accumulatedMeasurements.map { m ->
+
+            val now = System.currentTimeMillis() / 1000
+            val validMeasurements = accumulatedMeasurements.filter { it.timestamp <= now }
+            val futureMeasurements = accumulatedMeasurements.size - validMeasurements.size
+            if (futureMeasurements > 0) {
+                Log.w(TAG, "$futureMeasurements measurements from the future, ignoring")
+            }
+
+            val entities = validMeasurements.map { m ->
                 val gasResistanceArrayJson = if (m.gasResistanceArray != null) {
                     JSONArray(m.gasResistanceArray.toList()).toString()
                 } else {
@@ -304,17 +312,27 @@ class SensorSyncWorker(
                     gasResistanceArray = gasResistanceArrayJson
                 )
             }
-            database.measurementDao().insertAll(entities)
+            val results = database.measurementDao().insertAll(entities)
+            val insertedCount = results.count { it != -1L }
+            val duplicateCount = entities.size - insertedCount
+            if (duplicateCount > 0) {
+                Log.w(TAG, "$duplicateCount measurements with existing timestamps, ignoring.")
+            }
             database.measurementDao().keepOnlyLast(500)
 
-            val latest = accumulatedMeasurements.last()
-            Log.i(TAG, "💾 Saved ${accumulatedMeasurements.size} measurements to database")
-            Log.i(TAG, "   Latest: PM2.5=${String.format("%.1f", latest.pm25)} µg/m³, Temp=${latest.temperature}°C")
+            if (insertedCount > 0) {
+                val latest = validMeasurements.last()
+                Log.i(TAG, "💾 Saved $insertedCount measurements to database")
+                Log.i(
+                    TAG,
+                    "   Latest: PM2.5=${String.format("%.1f", latest.pm25)} µg/m³, Temp=${latest.temperature}°C"
+                )
 
-            // 6. Acknowledge
-            val maxTimestamp = accumulatedMeasurements.maxOf { it.timestamp }
-            acknowledgeBulkData(gatt, maxTimestamp)
-            Log.i(TAG, "✓ Acknowledged deletion up to timestamp $maxTimestamp")
+                // 6. Acknowledge
+                val maxTimestamp = validMeasurements.maxOf { it.timestamp }
+                acknowledgeBulkData(gatt, maxTimestamp)
+                Log.i(TAG, "✓ Acknowledged deletion up to timestamp $maxTimestamp")
+            }
         }
     }
 

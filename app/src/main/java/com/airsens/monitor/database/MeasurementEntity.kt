@@ -1,9 +1,10 @@
 package com.airsens.monitor.database
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "measurements")
+@Entity(tableName = "measurements", indices = [Index(value = ["timestamp"], unique = true)])
 data class MeasurementEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
